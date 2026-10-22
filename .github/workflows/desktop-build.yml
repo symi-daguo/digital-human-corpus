@@ -78,6 +78,23 @@ jobs:
           test -d desktop/src-tauri/.runtime/python/Lib/site-packages/numpy
           du -sh desktop/src-tauri/.runtime/python
       # 少了这步 npx 找不到 tauri CLI，报「could not determine executable to run」
+      - name: macOS 前置（内嵌 Python 运行时）
+        # 两个 arch 都要准备：`tauri.macos.conf.json` 会把 `.runtime/python`
+        # 映射进 .app，是**按平台自动加载**的，没法只对 x64 生效。
+        # 只给 x64 准备时，arm64 job 会因为找不到 `.runtime/python` 打包失败。
+        #
+        # 分发策略仍不同：Apple Silicon 用户走 macapp/Scripts/build.sh 的原生
+        # SwiftUI 壳（生产形态、Developer ID 签名），这个 Tauri 包只作为
+        # Intel 用户的可运行路径，也因此只有 macos-x64 会上传 Release。
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          chmod +x desktop/Scripts/prepare-python-mac.sh
+          if [ "${{ matrix.name }}" = "macos-x64" ]; then
+            desktop/Scripts/prepare-python-mac.sh x86_64
+          else
+            desktop/Scripts/prepare-python-mac.sh aarch64
+          fi
+
       - name: 安装前端依赖
         working-directory: desktop
         run: npm ci
@@ -134,16 +151,17 @@ jobs:
             Write-Error "安装包混进了 mlx（Apple Silicon 专有），requirements 的平台标记可能失效"
             exit 1
           }
-      - name: 上传到 Release（仅 Windows / Linux）
+      - name: 上传到 Release（Windows / Linux / macOS Intel）
         # 为什么排除 mac：macOS 的 dmg 必须用 Developer ID 正式签名才能分发，
         # CI runner 上没证书（私钥也不该进 CI）。本机 `macapp/Scripts/sign.sh`
         # + `make-dmg.sh` 产出签名版后手工上传；若让 CI 传同名 dmg 会把它覆盖成
         # 未签名版，用户打开会被 Gatekeeper 拦下。
-        if: matrix.name == 'windows-x64' || matrix.name == 'linux-x64'
+        if: matrix.name == 'windows-x64' || matrix.name == 'linux-x64' || matrix.name == 'macos-x64'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.0
           files: |
+            desktop/src-tauri/target/*/release/bundle/dmg/*.dmg
             desktop/src-tauri/target/release/bundle/nsis/*.exe
             desktop/src-tauri/target/*/release/bundle/nsis/*.exe
             desktop/src-tauri/target/release/bundle/deb/*.deb
@@ -166,6 +184,7 @@ jobs:
           # 通配符跨段匹配的边界行为不值得赌。
           path: |
             desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/*/release/bundle/dmg/*.dmg
             desktop/src-tauri/target/*/release/bundle/dmg/*.dmg
             desktop/src-tauri/target/release/bundle/nsis/*.exe
             desktop/src-tauri/target/*/release/bundle/nsis/*.exe
