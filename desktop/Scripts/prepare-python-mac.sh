@@ -68,12 +68,29 @@ tar -xzf "$TARBALL" -C "$RUNTIME"
 echo "  $("$PYDIR/bin/python3" -V) @ $PYDIR"
 
 step "3/4 预装依赖（mlx-lm 会被平台标记跳过）"
-# x86_64 上不能用 `pip install mlx-lm`：它只有 arm64 的 Metal 后端。
-# server/requirements.txt 里已带 `platform_machine == "arm64"` 标记，
-# 这里直接装即可 —— 装完自检会确认 mlx 确实没进来。
-"$PYDIR/bin/python3" -m pip install \
-  --disable-pip-version-check -q --no-warn-script-location \
-  -i "$MIRROR" -r "$REQS"
+# 为什么不用内嵌解释器自己的 pip：
+# 在 arm64 的 CI runner 上跑 x86_64 的 python3 属于**交叉**场景，
+# pip 会退化成源码编译。`cryptography` 走 maturin/Rust wheel，
+# 实测直接失败：
+#   error: subprocess-exited-with-error
+#   ERROR: Failed building wheel for cryptography
+# uv 能按 --python-platform 直接解析**预编译 wheel**，不触发编译。
+# （prepare-python-win.sh 在非 Windows 主机上也因此改用 uv，同一类问题。）
+if command -v uv >/dev/null 2>&1; then
+  UV=uv
+else
+  echo "  安装 uv（交叉装依赖必需）"
+  "$PYDIR/bin/python3" -m pip install --disable-pip-version-check -q uv \
+    -i "$MIRROR" --no-warn-script-location
+  UV="$PYDIR/bin/uv"
+fi
+
+"$UV" pip install \
+  --python "$PYDIR/bin/python3" \
+  --python-platform "x86_64-apple-darwin" \
+  --no-cache --quiet \
+  --index-url "$MIRROR" \
+  -r "$REQS"
 
 step "4/4 自检"
 "$PYDIR/bin/python3" - <<'PY'
