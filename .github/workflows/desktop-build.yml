@@ -87,7 +87,17 @@ jobs:
         # SwiftUI 壳（生产形态、Developer ID 签名），这个 Tauri 包只作为
         # Intel 用户的可运行路径，也因此只有 macos-x64 会上传 Release。
         if: startsWith(matrix.os, 'macos')
+        env:
+          # cryptography 50.x 没有 x86_64-apple-darwin 的预编译 wheel，
+          # uv 只能退到源码编译，而它的 openssl-sys 需要 OpenSSL 开发库。
+          # runner 默认没装，报「Could not find directory of OpenSSL installation」。
+          OPENSSL_DIR: /opt/homebrew/opt/openssl@3
+          PKG_CONFIG_PATH: /opt/homebrew/opt/openssl@3/lib/pkgconfig
         run: |
+          # x86_64 才需要编译 cryptography，arm64 有现成 wheel
+          if [ "${{ matrix.name }}" = "macos-x64" ]; then
+            brew install openssl@3 >/dev/null 2>&1 || true
+          fi
           chmod +x desktop/Scripts/prepare-python-mac.sh
           if [ "${{ matrix.name }}" = "macos-x64" ]; then
             desktop/Scripts/prepare-python-mac.sh x86_64
