@@ -129,6 +129,26 @@ jobs:
             Write-Error "安装包混进了 mlx（Apple Silicon 专有），requirements 的平台标记可能失效"
             exit 1
           }
+      - name: 上传到 Release（仅 Windows / Linux）
+        # 为什么排除 mac：macOS 的 dmg 必须用 Developer ID 正式签名才能分发，
+        # CI runner 上没证书（私钥也不该进 CI）。本机 `macapp/Scripts/sign.sh`
+        # + `make-dmg.sh` 产出签名版后手工上传；若让 CI 传同名 dmg 会把它覆盖成
+        # 未签名版，用户打开会被 Gatekeeper 拦下。
+        if: matrix.name == 'windows-x64' || matrix.name == 'linux-x64'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          files: |
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/*/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/*/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/*/release/bundle/appimage/*.AppImage
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/upload-artifact@v4
         with:
           # 必须带 matrix.name：两个 macos-latest 条目同名会让 v4 上传直接失败
