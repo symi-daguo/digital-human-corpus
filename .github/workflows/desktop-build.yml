@@ -16,6 +16,11 @@ on:
   push:
     tags: ["desktop-v*"]
 
+# GITHUB_TOKEN 默认只读；不声明 contents: write 时
+# softprops/action-gh-release 会报 "Resource not accessible by integration"。
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
