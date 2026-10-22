@@ -1,0 +1,41 @@
+[package]
+name = "digital-human-desktop"
+version = "0.4.0"
+description = "数字人服务（跨平台控制台）"
+authors = ["symi"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "digital_human_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# 单实例保护：同一台机器上「服务端」只能有一个。
+# 不接这个插件时，「开机自启」与「用户双击」是两条互不知情的拉起路径 →
+# 两个托盘图标 + 两套 Python 子进程抢同一个端口。macOS 壳上已实测发生
+# （2026-09-18：登录时被登录项与 LaunchAgent 同时拉起），修法与理由见
+# macapp/Sources/DigitalHumanApp/SingleInstance.swift。
+tauri-plugin-single-instance = "2"
+tauri-plugin-shell = "2"
+# 开机自启动。选插件而不是自己写注册表 / LaunchAgent：它 Windows 走
+# HKCU\...\CurrentVersion\Run（用户态，不需要管理员），macOS 走
+# ~/Library/LaunchAgents，并且顺带处理了「任务管理器 → 启动应用」那个
+# StartupApproved 覆盖标志（用户手动禁用过之后，不重置就永远是禁用的）。
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 健康检查刻意不用 reqwest：它默认拉 native-tls，Linux 打包要系统装 OpenSSL，
+# 交叉编译时最容易翻车的地方。探活只是「端口通不通」，std 的 TcpStream 足够。
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

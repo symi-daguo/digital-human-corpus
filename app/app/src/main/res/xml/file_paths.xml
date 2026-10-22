@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 可对外授权访问的路径白名单（导出备份包的分享用）。
+
+  只开放两个**专属目录**，不要图省事写 <external-path path="." />：
+  那等于把整个外部存储的读权限交给任何一个拿到我们 URI 的应用。
+
+  - files-backups：导出到「应用外部文件目录/backups」的备份包
+    （路径形如 /storage/emulated/0/Android/data/<pkg>/files/backups/xxx.zip）
+  - cache-import：从文件选择器拷进来的待恢复包（临时文件，恢复完即删）
+-->
+<paths>
+    <external-files-path name="files-backups" path="backups/" />
+    <cache-path name="cache-import" path="import/" />
+</paths>

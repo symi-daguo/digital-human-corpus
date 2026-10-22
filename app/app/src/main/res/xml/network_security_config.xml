@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  2026-09-17 改成「整体放行明文」，不再列举具体地址。
+  原因：服务端地址是**用户在设置页自己填的**，无法预先枚举 —— 旧实现写死了三个
+  局域网地址，用户把服务端换成别的地址后 OkHttp 会被系统直接拦掉，而且现象不直观。
+  默认带配对 Token → MacClient 走 https（自签证书 + 指纹固定），明文只出现在
+  「用户主动把 Token 清空」的遗留路径上，这里对该路径整体放行。
+  另：Android 9+ 默认禁止 cleartext，不放行会让上传 Worker 无限 retry 且服务端零请求。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "default",
+  "description": "默认权限：只放行自家 ipc 命令，不开 fs/shell/http 等能力",
+  "windows": ["main"],
+  "local": true,
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:app:default",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-close",
+    "core:tray:default",
+    "shell:allow-execute"
+  ]
+}

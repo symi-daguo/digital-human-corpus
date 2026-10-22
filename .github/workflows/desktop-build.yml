@@ -1,0 +1,152 @@
+# 桌面壳三端产物。注意三点：
+# 1. UI 由服务端 /console 渲染，本仓库只管壳，产物体积小（Rust + 过渡页）
+# 2. bundle.resources 带 server/（Python 源码 ~300KB）。Python 运行时是分发期问题：
+#    - macOS：内嵌 python-build-standalone（见 macapp/Scripts/build.sh）
+#    - Windows：内嵌 python-build-standalone —— 由本文件先在 windows-latest 上
+#      跑 desktop/Scripts/prepare-python-win.sh，把运行时与依赖预置到
+#      desktop/src-tauri/.runtime/，再由 tauri.windows.conf.json 映射进安装包。
+#      **伙伴机器不需要预装 Python 或 pip**
+#    - Linux：仍用系统 python3 + deb depends 声明
+# 3. `--bundles` 必须按平台显式写死：tauri.conf.json 里的 targets 是跨平台共享的，
+#    在 macOS 上它同样会去尝试 nsis、在 Linux 上会尝试 dmg，直接报「不支持的目标」。
+name: desktop-build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest          # Apple Silicon
+            name: macos-arm64
+            args: "--target aarch64-apple-darwin"
+            bundles: "app,dmg"
+          - os: macos-latest          # Intel Mac
+            name: macos-x64
+            args: "--target x86_64-apple-darwin"
+            bundles: "app,dmg"
+          - os: windows-latest
+            name: windows-x64
+            args: ""
+            bundles: "nsis"
+          - os: ubuntu-22.04          # glibc 2.35 = mlx[cpu] 的下限
+            name: linux-x64
+            args: ""
+            bundles: "deb,appimage"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Linux 前置（WebKitGTK 是 Tauri 在 Linux 的系统依赖）
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev
+      - name: Windows 前置（内嵌 Python 运行时 + 预装依赖）
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        env:
+          # runner 在境外，走 PyPI 官方源比国内镜像快
+          DH_PIP_INDEX: https://pypi.org/simple/
+        # 显式走 bash：脚本首行只是注释，靠 execute 位不如显式解释器可靠
+        run: bash desktop/Scripts/prepare-python-win.sh
+      - name: Windows 运行时自检
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          set -e
+          # 装不上就中止：宁可不出包，也不能给伙伴一个缺运行时的安装包
+          test -f desktop/src-tauri/.runtime/python/python.exe
+          test -d desktop/src-tauri/.runtime/python/Lib/site-packages/fastapi
+          test -d desktop/src-tauri/.runtime/python/Lib/site-packages/sherpa_onnx
+          test -d desktop/src-tauri/.runtime/python/Lib/site-packages/numpy
+          du -sh desktop/src-tauri/.runtime/python
+      # 少了这步 npx 找不到 tauri CLI，报「could not determine executable to run」
+      - name: 安装前端依赖
+        working-directory: desktop
+        run: npm ci
+      - name: Build
+        working-directory: desktop
+        run: npx tauri build --bundles ${{ matrix.bundles }} ${{ matrix.args }}
+      - name: Windows 安装包内容自检（确认真的带了 Python）
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem desktop/src-tauri/target/release/bundle/nsis/*.exe).FullName
+          $len = (Get-Item $exe).Length
+          Write-Host "安装包：$exe（$([math]::Round($len / 1MB, 1)) MB）"
+
+          # 内嵌 Python 运行时约 197MB，LZMA 后安装包约 41MB。一旦 resources 映射
+          # 失效（配置改名 / 被基础配置覆盖 / .runtime 没生成），安装包会掉到 5MB
+          # 量级，而构建与上传依旧全绿 —— 用体积下限把这种静默失败拦在产物之前。
+          if ($len -lt 26214400) {
+            Write-Error "安装包只有 $([math]::Round($len / 1MB, 1)) MB，疑似没带内嵌 Python 运行时"
+            exit 1
+          }
+
+          # 体积对了也要看内容：确认 python.exe 与服务端依赖真的在包内
+          $7z = "$env:ProgramFiles\7-Zip\7z.exe"
+          if (-not (Test-Path $7z)) { $7z = (Get-Command 7z -ErrorAction SilentlyContinue).Source }
+          if (-not $7z) { Write-Warning "runner 上没有 7-Zip，跳过内容列举"; exit 0 }
+
+          $raw = & $7z l $exe
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "7-Zip 列举安装包失败（exit $LASTEXITCODE）"
+            exit 1
+          }
+          # Windows 版 7-Zip 列 NSIS 条目用的是反斜杠（python\python.exe），
+          # 而 macOS 上的 7zz 用正斜杠。不归一化的话断言会「全部命中 0」，
+          # 把好好的安装包判成缺运行时 —— 这个坑已经实测踩过一次。
+          $list = $raw -replace '\\', '/'
+          Write-Host "包内条目总数：$(@($list).Count)"
+          Write-Host "--- 清单样例 ---"
+          @($list) | Select-Object -First 3 | ForEach-Object { Write-Host "  $_" }
+          # 断言用「不含前导目录」的片段：不同 7-Zip 版本可能带上归档名前缀，
+          # 只认站点包目录名，避免把路径前缀差异误判成内容缺失
+          $nExe = @($list | Select-String -SimpleMatch 'python.exe').Count
+          $nFas = @($list | Select-String -SimpleMatch 'site-packages/fastapi').Count
+          $nShp = @($list | Select-String -SimpleMatch 'site-packages/sherpa_onnx').Count
+          $nMlx = @($list | Select-String -SimpleMatch 'mlx_lm').Count
+          Write-Host "包内命中：python.exe=$nExe  fastapi=$nFas  sherpa_onnx=$nShp  mlx_lm=$nMlx（mlx 应为 0）"
+
+          if ($nExe -lt 1 -or $nFas -lt 1 -or $nShp -lt 1) {
+            Write-Error "安装包里缺内嵌 Python 运行时或关键依赖"
+            exit 1
+          }
+          # mlx 依赖 Metal，Windows 上装不了；混进去说明平台标记失效了
+          if ($nMlx -ne 0) {
+            Write-Error "安装包混进了 mlx（Apple Silicon 专有），requirements 的平台标记可能失效"
+            exit 1
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          # 必须带 matrix.name：两个 macos-latest 条目同名会让 v4 上传直接失败
+          name: desktop-${{ matrix.name }}
+          # 两种目录形态都要列，不能只写 target/release：
+          #   带 --target 的条目（两个 macos）→ target/<triple>/release/bundle/
+          #   不带的（windows / linux）      → target/release/bundle/
+          # 只写前者时 mac 任务会「构建成功但零产物」，而 upload-artifact 默认
+          # 只 warn 不报错，任务照样是绿的，极易漏掉。这里宁可写两遍也不用 `**`，
+          # 通配符跨段匹配的边界行为不值得赌。
+          path: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/*/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/*/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/*/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/*/release/bundle/appimage/*.AppImage
+          # 一个都没匹配到就是真出错了，宁可红也别给个空产物
+          if-no-files-found: error

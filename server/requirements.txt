@@ -1,0 +1,37 @@
+# -*- coding: utf-8 -*-
+# 核心 Web 服务
+# 采用「下限 + 上界」写法：下限保证功能可用，上界避免未来大版本不兼容升级。
+fastapi>=0.115,<1.0
+uvicorn>=0.32,<1.0
+starlette>=0.41,<2.0
+pydantic>=2.9,<3.0
+python-multipart>=0.0.12,<0.1.0
+
+# 自签 TLS 证书自动生成（config.ensure_tls）。缺了它用户就得手工跑 openssl 填 SAN。
+# 上界 <51 放开到 2026-10 稳定线 50.x：本服务只用 x509 基础 API（EC 密钥生成 + 证书构建），
+# 跨 44→50 的 API 面稳定，无破坏性变更。
+cryptography>=44,<51
+
+# 音频 / 说话人 / 非人声检测
+# numpy 必须显式声明：sherpa-onnx 只依赖 sherpa-onnx-core，不传递 numpy，
+# 但 voiceprint.py 与 audio_tagging.py 直接 import numpy。
+sherpa-onnx>=1.13.6,<2.0
+numpy>=2.0,<3.0
+
+# 本地 LLM 后端（start-all.sh 以 `python -m mlx_lm.server` 拉起，端口 DH_LLM_PORT）。
+# 2026-09-03 实测 0.31.3 可用；漏装的话 start-all 会跳过 LLM 启动，干净稿/总结全空白。
+#
+# 只有 Apple Silicon 装得上：mlx 依赖 Metal，Windows / Linux / Intel Mac 都没有
+# 对应的 wheel。这里加环境标记（PEP 508）而不是拆出第二个 requirements 文件，
+# 是为了让 `pip install -r requirements.txt` 在所有平台都**整条成功**——否则
+# 解析阶段就报错，fastapi / sherpa-onnx 一个也装不上，桌面壳在这些平台上根本
+# 起不来（Windows 版就卡在这）。
+# 这些平台不装 mlx-lm 不影响主流程：把「运行位置」配成云端（DeepSeek 等），
+# config.llm_is_cloud() 会走 HTTP 出网，完全不经过 mlx。
+mlx-lm>=0.31.3,<1.0; sys_platform == "darwin" and platform_machine == "arm64"
+# Ming-3.0-tts 本地推理（2026-10-22）。0.6.1 起内置 bailingmm，无需装 git 主分支；
+# 只有 Apple Silicon 装得上，其它平台自动落到 say，不影响主流程。
+mlx-audio>=0.6.1,<1.0; sys_platform == "darwin" and platform_machine == "arm64"
+# Ming-3.0-tts 本地推理（2026-10-22）。0.6.1 起内置 bailingmm，无需装 git 主分支；
+# 只有 Apple Silicon 装得上，其它平台自动落到 say，不影响主流程。
+mlx-audio>=0.6.1,<1.0; sys_platform == "darwin" and platform_machine == "arm64"

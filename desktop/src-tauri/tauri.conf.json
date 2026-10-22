@@ -1,0 +1,84 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "数字人服务",
+  "version": "1.5.31",
+  "identifier": "com.symi.digitalhuman.desktop",
+  "build": {
+    "devUrl": "https://127.0.0.1:8766/console",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "数字人服务",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 480,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://127.0.0.1:8766 https://127.0.0.1:8766 http://127.0.0.1:8767; connect-src 'self' ipc: http://127.0.0.1:8766 https://127.0.0.1:8766 http://127.0.0.1:8767"
+    },
+    "trayIcon": {
+      "id": "main",
+      "iconPath": "icons/tray.png",
+      "iconAsTemplate": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "deb",
+      "appimage"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../server/app": "server/app",
+      "../../server/industries": "server/industries",
+      "../../server/tools": "server/tools",
+      "../../server/run.py": "server/run.py",
+      "../../server/rebuild_report.py": "server/rebuild_report.py",
+      "../../server/requirements.txt": "server/requirements.txt",
+      "../../VERSION": "VERSION"
+    },
+    "publisher": "symi",
+    "copyright": "Copyright (c) 2026 symi",
+    "linux": {
+      "deb": {
+        "depends": [
+          "python3",
+          "python3-pip"
+        ]
+      }
+    },
+    "windows": {
+      "nsis": {
+        "languages": [
+          "SimpChinese"
+        ],
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "icons/nsis-header.bmp",
+        "sidebarImage": "icons/nsis-sidebar.bmp"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

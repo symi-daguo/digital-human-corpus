@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>数字人服务</title>
+<style>
+  /* 极简：桌面端只负责把工作台拉起来，界面由服务端渲染。
+     这里唯一的 UI 是「等服务」的过渡页 —— 冷启动要加载 ASR 模型，
+     直接白屏会让人以为挂了。 */
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column;
+         align-items: center; justify-content: center; gap: 12px;
+         font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: Canvas; color: CanvasText; }
+  .spin { width: 26px; height: 26px; border: 2.5px solid currentColor;
+          border-right-color: transparent; border-radius: 50%;
+          animation: r .8s linear infinite; opacity: .6; }
+  @keyframes r { to { transform: rotate(360deg); } }
+  .hint { color: GrayText; font-size: 12.5px; text-align: center; }
+  .retry { margin-top: 4px; padding: 5px 14px; border-radius: 6px;
+           border: 1px solid GrayText; background: none; color: CanvasText;
+           cursor: pointer; font-size: 12.5px; }
+  .retry:hover { border-color: Highlight; color: Highlight; }
+  .url { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         font-size: 12px; user-select: all; }
+</style>
+</head>
+<body>
+  <div class="spin" id="s"></div>
+  <div class="hint" id="msg">正在启动本地服务…</div>
+  <button class="retry" id="btn" style="display:none">重试</button>
+  <div class="hint" id="done" style="display:none">
+    工作台已在默认浏览器中打开。<br>
+    若浏览器提示证书不受信任，点「高级 → 继续访问」即可（本地自签证书）。<br>
+    <span class="url" id="fallback-url"></span>
+  </div>
+  <div class="hint">
+    关闭本窗口不会退出服务：它会收进右下角托盘常驻，从托盘菜单可随时重新打开或退出。
+  </div>
+
+<script type="module">
+const { invoke } = window.__TAURI__.core;
+
+async function start(){
+  const msg = document.getElementById('msg');
+  const btn = document.getElementById('btn');
+  const spin = document.getElementById('s');
+  const done = document.getElementById('done');
+  btn.style.display = 'none';
+  done.style.display = 'none';
+  spin.style.display = '';
+
+  // 壳内工作台地址由 Rust 侧给出：端口只在 lib.rs 定义一份，避免两边各写一个数
+  const consoleUrl = await invoke('desktop_url');
+  document.getElementById('fallback-url').textContent = consoleUrl;
+
+  const up = await invoke('server_status');
+  if (!up) {
+    msg.textContent = '正在启动本地服务…';
+    try { await invoke('start_server'); }
+    catch (e) { msg.textContent = '启动失败：' + e; btn.style.display = ''; throw e; }
+  }
+
+  // 轮询的是**回环入口**是否可用，而不是主服务端口。服务端是在 lifespan
+  // 初始化全部完成之后才开这个端口的（server/app/main.py 里
+  // desktop_bridge.start() 的位置），所以它一通，工作台就是真的能用，
+  // 不会出现「页面打开了但接口连续 500」的中间态。
+  for (let i = 0; i < 90; i++) {
+    if (await invoke('desktop_ready')) {
+      msg.textContent = '正在打开工作台…';
+      // 就在本窗口内导航到工作台 —— 进的是**明文回环**地址，没有证书问题。
+      //
+      // 千万不要改成 https://127.0.0.1:8766/console：主服务只提供自签 HTTPS，
+      // 而 macOS WKWebView 与 Windows WebView2 对不受信证书的处理都是
+      // 「导航失败」——窗口会白屏，用户又没有浏览器那种「继续访问」可点。
+      // 服务端因此额外开了这个只绑 127.0.0.1 的明文入口
+      //（server/app/desktop_bridge.py），本窗口加载的就是它。
+      location.replace(consoleUrl);
+      return;
+    }
+    if (i === 4) msg.textContent = '首次启动需加载语音模型，约十几秒…';
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  // 90 秒还没等到回环入口：多半是壳外的服务已经在跑（那种启动方式不会开回环入口）。
+  // 退回系统浏览器 —— 它能给出「高级 → 继续访问」，用户仍然用得上工作台。
+  msg.textContent = '工作台未就绪，正在用系统浏览器打开…';
+  try { await invoke('open_console'); }
+  catch (e) { msg.textContent = '无法打开工作台，请查看日志'; btn.style.display = ''; return; }
+  msg.textContent = '工作台已在系统浏览器中打开';
+  spin.style.display = 'none';
+  done.style.display = '';
+}
+
+document.getElementById('btn').onclick = start;
+start();
+</script>
+</body>
+</html>

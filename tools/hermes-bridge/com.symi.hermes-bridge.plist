@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hermes 语音桥接常驻
+
+  使用前把 <YOUR_HOME> 替换成你的用户目录（如 /Users/yourname）。
+  必须用绝对路径：launchd 不展开 ~ 与 $HOME。
+
+  为什么需要它：桥接（9876）是「手机 → 数字人服务 → Hermes」这条链路的入口。
+  之前一直是手工 `python3 hermes_wake_receiver.py &` 起的，Mac 一重启就没了；
+  丢了之后 talk 会退到 quick_answer（快，但**没有 HA 能力**），
+  与「HA 必须能用」的要求冲突。
+
+  为什么用 start-bridge.py 而不是直接跑桥接：
+  桥接自己不读 ~/.hermes/.env，只认进程环境变量；而 bash 3.2 解析不了 .env 里
+  带空格/特殊字符的值（实测 MINIMAX_CN_API_KEY 会读成空串，AI 后端全灭）。
+  wrapper 用 Python 逐行解析后 execve 注入，已验证注入 36 个变量。
+
+  为什么用 /usr/bin/python3：桥接只依赖标准库，系统解释器不会随 WorkBuddy 升级消失。
+
+  KeepAlive=SuccessfulExit:false —— 正常退出（exit 0）不重拉，崩溃才重拉，
+  避免端口被占时 launchd 疯狂重启。
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.symi.hermes-bridge</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string><YOUR_HOME>/.hermes/scripts/start-bridge.py</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>ProcessType</key>
+	<string>Background</string>
+
+	<key>Nice</key>
+	<integer>5</integer>
+
+	<key>StandardOutPath</key>
+	<string><YOUR_HOME>/.hermes/logs/bridge.log</string>
+
+	<key>StandardErrorPath</key>
+	<string><YOUR_HOME>/.hermes/logs/bridge.err.log</string>
+
+	<key>WorkingDirectory</key>
+	<string><YOUR_HOME>/.hermes</string>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+		<key>HOME</key>
+		<string><YOUR_HOME></string>
+	</dict>
+</dict>
+</plist>

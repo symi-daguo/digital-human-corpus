@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>数字人服务</string>
+    <key>CFBundleDisplayName</key>
+    <string>数字人服务</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.symi.digitalhuman</string>
+    <key>CFBundleExecutable</key>
+    <string>DigitalHumanApp</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <!-- 菜单栏 app：不出现在 Dock 与 Cmd+Tab，只在状态栏显示图标 -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>数字人服务需要在局域网内与手机端采集 App 通信，用于接收上传的录音片段。</string>
+    <!-- 主窗口内嵌工作台走 http://127.0.0.1:8767（明文回环）。
+         ATS 对数字 IP 的回环连接本就放行，这一项是显式声明、不是绕过：
+         写清楚比依赖「ATS 恰好不管 IP 字面量」这条隐式规则可靠 —— 万一将来
+         规则收紧，症状是一整片白窗口，而日志里什么都不会有。
+         只放开本地网络，没有开 NSAllowsArbitraryLoads。 -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+</dict>
+</plist>

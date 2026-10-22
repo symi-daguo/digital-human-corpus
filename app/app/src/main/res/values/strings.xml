@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">语料采集</string>
+    <string name="mic_usage_desc">用于在您授权的触发条件下录制语音并生成每日文字记录，音频仅在本机与您的电脑之间传输。</string>
+</resources>

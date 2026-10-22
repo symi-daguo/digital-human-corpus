@@ -1,0 +1,69 @@
+# Gradle / Android
+.gradle/
+build/
+app/build/
+local.properties
+*.apk
+*.aab
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Python / server
+server/.venv/
+# 只写 server/__pycache__/ 是不够的：tools/ 下的脚本一跑 py_compile 就会
+# 冒出 tools/__pycache__/，然后混进 `git add -A`。这里按目录名全量忽略。
+__pycache__/
+*.py[cod]
+server/**/*.pyc
+server/data/
+server/models/
+server/clips/
+server/certs/*.pem
+server/certs/*.key
+server/*.log
+
+# 第三方大二进制（构建前自行下载放进 app/app/libs/，不入库）
+app/app/libs/*.aar
+
+# 运行数据不入库
+*.db
+*.sqlite3
+
+# AI 协作记忆（本地）
+.ai-memory/
+.workbuddy/
+
+# 发布签名（密钥与密码不入库，务必另行备份 keystore/digitalhuman.jks）
+app/keystore/
+app/keystore.properties
+
+# Android 出厂默认服务端地址（内网 IP 属于本机部署事实，不入库；
+# 需要时从 app/dh.properties.example 复制，构建缺文件时退化为空串）
+app/dh.properties
+
+# 服务端环境变量（含 token）
+server/env.local
+
+# Kotlin 构建会话残留
+app/.kotlin/
+
+# macOS app 构建产物（含 55MB 内嵌 Python 与数百 MB 依赖，一律本地构建）
+macapp/.build/
+macapp/.cache/
+macapp/dist/
+macapp/*.dmg
+
+# Tauri/Rust 构建产物
+desktop/src-tauri/target/
+desktop/node_modules/
+
+# Windows 桌面端内嵌 Python（构建期由 desktop/Scripts/prepare-python-win.sh 生成：
+# 20MB 归档 + 解出的运行时与依赖，约 150MB，绝不入库）
+desktop/src-tauri/.runtime/
+desktop/.cache/

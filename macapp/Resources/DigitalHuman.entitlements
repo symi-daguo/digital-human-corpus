@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 站外分发：不启用 App Sandbox（沙盒只在 Mac App Store 强制）。
+         不沙盒才能保留 LaunchAgent 常驻与模型按需下载。 -->
+
+    <!-- Python 与其 native 扩展（numpy / mlx / onnxruntime）需要 RWX 内存做
+         JIT 与动态代码生成。不开放的话 Hardened Runtime 会在运行时杀掉进程。 -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- 内嵌 Python 会加载第三方 wheel 里的 .dylib，这些库不可能全用我们的
+         Team ID 签名。不开这一项，import 阶段会被 code signing 拦下。 -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
