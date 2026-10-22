@@ -23,22 +23,12 @@ permissions:
 
 jobs:
   build:
-    # macOS 的 Tauri 壳（Intel）暂时出不来：上游 cryptography 无 x86_64 wheel，
-    # 源码编译又缺 OpenSSL。失败不阻塞，也不让整条流水线变红——
-    # Windows/Linux 是有效产物，看板全红会让人误以为那边也坏了。
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    # 只出 Windows / Linux 两个桌面壳。macOS 走 macapp/ 的原生 SwiftUI 壳
+    # （生产形态、Developer ID 签名），Tauri 的 macOS 包不发布。
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest          # Apple Silicon
-            name: macos-arm64
-            args: "--target aarch64-apple-darwin"
-            bundles: "app,dmg"
-          - os: macos-latest          # Intel Mac
-            name: macos-x64
-            args: "--target x86_64-apple-darwin"
-            bundles: "app,dmg"
           - os: windows-latest
             name: windows-x64
             args: ""
@@ -51,8 +41,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -82,34 +70,6 @@ jobs:
           test -d desktop/src-tauri/.runtime/python/Lib/site-packages/numpy
           du -sh desktop/src-tauri/.runtime/python
       # 少了这步 npx 找不到 tauri CLI，报「could not determine executable to run」
-      - name: macOS 前置（内嵌 Python 运行时）
-        # 两个 arch 都要准备：`tauri.macos.conf.json` 会把 `.runtime/python`
-        # 映射进 .app，是**按平台自动加载**的，没法只对 x64 生效。
-        # 只给 x64 准备时，arm64 job 会因为找不到 `.runtime/python` 打包失败。
-        #
-        # 分发策略仍不同：Apple Silicon 用户走 macapp/Scripts/build.sh 的原生
-        # SwiftUI 壳（生产形态、Developer ID 签名），这个 Tauri 包只作为
-        # Intel 用户的可运行路径，也因此只有 macos-x64 会上传 Release。
-        if: startsWith(matrix.os, 'macos')
-        continue-on-error: true
-        env:
-          # cryptography 50.x 没有 x86_64-apple-darwin 的预编译 wheel，
-          # uv 只能退到源码编译，而它的 openssl-sys 需要 OpenSSL 开发库。
-          # runner 默认没装，报「Could not find directory of OpenSSL installation」。
-          OPENSSL_DIR: /opt/homebrew/opt/openssl@3
-          PKG_CONFIG_PATH: /opt/homebrew/opt/openssl@3/lib/pkgconfig
-        run: |
-          # x86_64 才需要编译 cryptography，arm64 有现成 wheel
-          if [ "${{ matrix.name }}" = "macos-x64" ]; then
-            brew install openssl@3 >/dev/null 2>&1 || true
-          fi
-          chmod +x desktop/Scripts/prepare-python-mac.sh
-          if [ "${{ matrix.name }}" = "macos-x64" ]; then
-            desktop/Scripts/prepare-python-mac.sh x86_64
-          else
-            desktop/Scripts/prepare-python-mac.sh aarch64
-          fi
-
       - name: 安装前端依赖
         working-directory: desktop
         run: npm ci
