@@ -23,7 +23,30 @@
 
 ---
 
-## 二、快速开始
+## 二、下载安装包
+
+不想自己编译的话，直接下现成产物：[**Releases**](https://github.com/symi-daguo/digital-human-corpus/releases/latest)
+
+| 平台 | 产物 | 说明 |
+| --- | --- | --- |
+| Android | `app-arm64-v8a-release.apk`（39MB） | **推荐**，绝大多数手机 |
+| Android | `app-armeabi-v7a-release.apk`（30MB） | 老旧 32 位设备 |
+| Android | `app-universal-release.apk`（128MB） | 不确定架构时用，全兼容 |
+| macOS | `DigitalHuman-1.0.0-macos-arm64.dmg`（499MB） | Apple Silicon，**Developer ID 正式签名**（未公证，首次打开需右键→打开） |
+| Windows | `*.exe`（NSIS 安装包） | Win10/11 x64，**已内嵌 Python 运行时**，无需预装 |
+| Linux | `*.deb` / `*.AppImage` | 需要系统 python3 + WebKitGTK |
+
+**平台限制**：本地 LLM 走 MLX（依赖 Metal），**只有 Apple Silicon 能跑**。
+Intel Mac / Windows / Linux 上必须在工作台里把模型配成云端 API。
+
+**架构说明**：Android 端只做采集；转写、说话人分离、LLM 清洗、日报都在 Mac 侧完成。
+Windows / Linux 的桌面壳是"服务端 + 界面"的可视化外壳，功能与 Mac 版一致（除本地 LLM）。
+
+---
+
+## 三、从源码构建
+
+
 
 ### 环境要求
 
@@ -74,7 +97,7 @@ cd app && ./gradlew assembleRelease
 
 ---
 
-## 三、日常使用
+## 四、日常使用
 
 **设一次就行**：
 
@@ -101,11 +124,11 @@ cd app && ./gradlew assembleRelease
 └── data/backups/                          自动快照（每次启动一份，保留最近 7 份）
 ```
 
-**升级不会丢数据**：数据库在应用包外，APK 覆盖安装只换程序不碰私有数据，表结构迁移只加列不删列。详见第八节。
+**升级不会丢数据**：数据库在应用包外，APK 覆盖安装只换程序不碰私有数据，表结构迁移只加列不删列。详见第九节。
 
 ---
 
-## 四、三种处理模式
+## 五、三种处理模式
 
 | 模式 | 行为 | 适用 |
 | --- | --- | --- |
@@ -125,7 +148,7 @@ tools/agg-mode.sh window     # 切定时 + 攒批
 
 ---
 
-## 五、技术栈
+## 六、技术栈
 
 | 层 | 选型 |
 | --- | --- |
@@ -141,7 +164,7 @@ tools/agg-mode.sh window     # 切定时 + 攒批
 
 ---
 
-## 六、目录结构
+## 七、目录结构
 
 ```
 app/       Android 采集客户端
@@ -154,7 +177,7 @@ docs/      部署文档（模型清单 / 各平台注意事项）
 
 ---
 
-## 七、文档
+## 八、文档
 
 只保留一篇：[`docs/deployment.md`](docs/deployment.md)——模型下载清单、三端构建细节、Windows / Linux 注意事项、常见故障排查。
 
@@ -162,7 +185,7 @@ docs/      部署文档（模型清单 / 各平台注意事项）
 
 ---
 
-## 八、数据安全
+## 九、数据安全
 
 **为什么升级不会丢数据**（机制保证，不是口头承诺）：
 
@@ -176,7 +199,7 @@ docs/      部署文档（模型清单 / 各平台注意事项）
 
 ---
 
-## 九、许可
+## 十、许可
 
 代码以 **MIT** 发布，见 [`LICENSE`](LICENSE)。第三方组件与模型的许可、以及各自的使用限制见 [`NOTICE.md`](NOTICE.md)。
 
