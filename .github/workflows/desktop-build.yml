@@ -23,6 +23,10 @@ permissions:
 
 jobs:
   build:
+    # macOS 的 Tauri 壳（Intel）暂时出不来：上游 cryptography 无 x86_64 wheel，
+    # 源码编译又缺 OpenSSL。失败不阻塞，也不让整条流水线变红——
+    # Windows/Linux 是有效产物，看板全红会让人误以为那边也坏了。
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       fail-fast: false
       matrix:
