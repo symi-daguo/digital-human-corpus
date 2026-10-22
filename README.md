@@ -39,6 +39,12 @@
 **平台限制**：本地 LLM 走 MLX（依赖 Metal），**只有 Apple Silicon 能跑**。
 Intel Mac / Windows / Linux 上必须在工作台里把模型配成云端 API。
 
+**Intel Mac 说明**：官方只发 Apple Silicon 的 dmg。Intel 机器请按下面「从源码构建」
+自行编译 Tauri 壳（`cd desktop && npm install && npm run tauri build`），并先跑
+`desktop/Scripts/prepare-python-mac.sh x86_64` 准备内嵌运行时。
+> 这一步在 CI 上暂未跑通：`cryptography` 上游没有 macosx_x86_64 wheel，
+> 源码编译又需要 OpenSSL 开发库。本机（Intel + 已装 `brew install openssl@3`）可以完成。
+
 **架构说明**：Android 端只做采集；转写、说话人分离、LLM 清洗、日报都在 Mac 侧完成。
 Windows / Linux 的桌面壳是"服务端 + 界面"的可视化外壳，功能与 Mac 版一致（除本地 LLM）。
 

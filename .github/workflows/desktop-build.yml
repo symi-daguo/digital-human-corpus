@@ -87,6 +87,7 @@ jobs:
         # SwiftUI 壳（生产形态、Developer ID 签名），这个 Tauri 包只作为
         # Intel 用户的可运行路径，也因此只有 macos-x64 会上传 Release。
         if: startsWith(matrix.os, 'macos')
+        continue-on-error: true
         env:
           # cryptography 50.x 没有 x86_64-apple-darwin 的预编译 wheel，
           # uv 只能退到源码编译，而它的 openssl-sys 需要 OpenSSL 开发库。
@@ -161,17 +162,16 @@ jobs:
             Write-Error "安装包混进了 mlx（Apple Silicon 专有），requirements 的平台标记可能失效"
             exit 1
           }
-      - name: 上传到 Release（Windows / Linux / macOS Intel）
+      - name: 上传到 Release（Windows / Linux）
         # 为什么排除 mac：macOS 的 dmg 必须用 Developer ID 正式签名才能分发，
         # CI runner 上没证书（私钥也不该进 CI）。本机 `macapp/Scripts/sign.sh`
         # + `make-dmg.sh` 产出签名版后手工上传；若让 CI 传同名 dmg 会把它覆盖成
         # 未签名版，用户打开会被 Gatekeeper 拦下。
-        if: matrix.name == 'windows-x64' || matrix.name == 'linux-x64' || matrix.name == 'macos-x64'
+        if: matrix.name == 'windows-x64' || matrix.name == 'linux-x64'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.0
           files: |
-            desktop/src-tauri/target/*/release/bundle/dmg/*.dmg
             desktop/src-tauri/target/release/bundle/nsis/*.exe
             desktop/src-tauri/target/*/release/bundle/nsis/*.exe
             desktop/src-tauri/target/release/bundle/deb/*.deb
@@ -194,8 +194,6 @@ jobs:
           # 通配符跨段匹配的边界行为不值得赌。
           path: |
             desktop/src-tauri/target/release/bundle/dmg/*.dmg
-            desktop/src-tauri/target/*/release/bundle/dmg/*.dmg
-            desktop/src-tauri/target/*/release/bundle/dmg/*.dmg
             desktop/src-tauri/target/release/bundle/nsis/*.exe
             desktop/src-tauri/target/*/release/bundle/nsis/*.exe
             desktop/src-tauri/target/release/bundle/deb/*.deb
