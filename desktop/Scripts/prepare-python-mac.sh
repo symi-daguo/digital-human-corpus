@@ -30,7 +30,7 @@ esac
 # 与 macapp/Scripts/build.sh 钉在同一条 python-build-standalone 发布线（tag 20250818）。
 # 那份用的是 aarch64 的 3.13.5；同 tag 下 x86_64 的补丁号可能不同，用 3.13.5 对齐。
 PBS_TAG="20250818"
-PBS_PY="3.13.5"
+PBS_PY="3.13.7"
 PBS_ASSET="cpython-${PBS_PY}+${PBS_TAG}-${PBS_ARCH}-install_only.tar.gz"
 # URL 里的 "+" 必须编码成 %2B，否则 GitHub 会当成空格
 PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${PBS_ASSET//+/%2B}"

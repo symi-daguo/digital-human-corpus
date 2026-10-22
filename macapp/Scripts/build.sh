@@ -64,7 +64,7 @@ if [[ -z "$PYTHON_SRC" || ! -x "$PYTHON_SRC/bin/python3" ]]; then
 Homebrew Python 都不行 —— 它们的 libpython 是绝对路径依赖。
 
 获取方式：
-  curl -LO https://github.com/astral-sh/python-build-standalone/releases/download/20250818/cpython-3.13.5+20250818-aarch64-apple-darwin-install_only.tar.gz
+  curl -LO https://github.com/astral-sh/python-build-standalone/releases/download/20250818/cpython-3.13.7+20250818-aarch64-apple-darwin-install_only.tar.gz
   tar xzf cpython-*.tar.gz
   export DH_PYTHON_SRC=$PWD/python
 EOF
