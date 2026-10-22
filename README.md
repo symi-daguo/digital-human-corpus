@@ -33,8 +33,8 @@
 | Android | `app-armeabi-v7a-release.apk`（30MB） | 老旧 32 位设备 |
 | Android | `app-universal-release.apk`（128MB） | 不确定架构时用，全兼容 |
 | macOS | `DigitalHuman-1.0.0-macos-arm64.dmg`（499MB） | Apple Silicon，**Developer ID 正式签名**（未公证，首次打开需右键→打开） |
-| Windows | `*.exe`（NSIS 安装包） | Win10/11 x64，**已内嵌 Python 运行时**，无需预装 |
-| Linux | `*.deb` / `*.AppImage` | 需要系统 python3 + WebKitGTK |
+| Windows | `DigitalHuman_1.0.0_x64-setup.exe`（40MB） | Win10/11 x64，**已内嵌 Python 运行时**，无需预装 |
+| Linux | `DigitalHuman_1.0.0_amd64.deb`（3MB）/ `_amd64.AppImage`（78MB） | 需要系统 python3 + WebKitGTK |
 
 **平台限制**：本地 LLM 走 MLX（依赖 Metal），**只有 Apple Silicon 能跑**。
 Intel Mac / Windows / Linux 上必须在工作台里把模型配成云端 API。
