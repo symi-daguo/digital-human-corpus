@@ -170,3 +170,40 @@ server/ctl.sh {start|stop|status}   # 服务端进程管理
 pkill -9 -x DigitalHumanApp; pkill -9 -f 'server/run\.py'; sleep 3
 open -a "数字人服务"
 ```
+
+---
+
+## 七、知识库对接（WeKnora 路线）
+
+日报与语音语料的长期沉淀需要一个可检索的知识库。选型腾讯开源 **WeKnora**
+（v0.8.3，MIT），本地源码位于 `/Volumes/hasskit/WeKnora`（未入本仓）。
+
+### 形态确认（2026-10-23 调研）
+
+| 形态 | 依赖 | 结论 |
+| --- | --- | --- |
+| **WeKnora-lite 单二进制** | SQLite + 内存队列，零外部依赖 | **最契合本机**；但 v0.8.3 未发布二进制资产，formula 指向的 v0.3.6-test 资产也已下架 |
+| 标准版 docker-compose | PostgreSQL + Redis + MinIO | 本机资源重，不采用 |
+
+### 对接设计（与数字人管线的接点）
+
+1. **写入侧**：每日语料导出（`data/tenants/<租户>/corpus/<日期>/`）推送为
+   WeKnora 知识库文档。**推送前必须过 `redact.redact()`**——凭证与 PII
+   绝不入知识库（出口脱敏同一标准）。
+2. **查询侧**：对话/日报智能体遇到「之前说过/历史记录」类问题时，检索
+   WeKnora（REST API 或其 MCP server，仓库内 `mcp-server/weknora_mcp_server.py`），
+   检索结果注入 LLM 上下文。
+3. **检索种子**：`/summary` 已返回的 `keywords`（insights.extract_keywords）
+   直接作为 KB 检索 query 的种子词，不必再对原文做理解。
+4. **隐私红线**：知识库内容视为对外数据，与 agent 出口同一脱敏等级。
+
+### 启用步骤（待上游发二进制后）
+
+```bash
+# 1) 获取 lite 二进制（上游 release 或源码 make 构建）
+# 2) 启动（默认端口以官方 .env.lite.example 为准）
+WEKNORA_DATA_DIR=~/Library/Application\ Support/DigitalHuman/weknora ./WeKnora-lite
+# 3) 建知识库 + 推送当日语料（tools/weknora_push.py，待 lite 就绪后补充）
+# 4) 智能体侧：SKILL.md 增加检索工具说明
+```
+
