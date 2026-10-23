@@ -1596,7 +1596,10 @@ function renderStorage(s) {
     '<th>原始音频</th><th>语料</th><th>数据库</th></tr>' + rows + '</table>' +
     '<p style="color:var(--dim);font-size:var(--f2);margin:var(--s3) 0 0">' +
     '「合计」= 原始音频 + 语料 + 数据库 + 文本，四列见上表，别把它当成语料一个目录。' +
-    '原始音频按日分区，日终 / final 轮完成后自动清理，不会无限增长；' +
+    '音频回收（1.0.3，每天一轮）：日终（final）跑完后删该日全部 wav；' +
+    '未终稿的音频与语料 wavs 副本超过 DH_RECLAIM_AFTER_DAYS（默认 7）天自动删；' +
+    '低信息密度（无实体信号且有效字很少）的段 3 天后优先删。' +
+    '只删 wav，转写文本与语料 jsonl 永久保留，日报与检索不受影响。' +
     '语料（corpus）与备份包（backups）是长期保留的 —— 若备份越堆越多，' +
     '可在 Mac 上删掉 <span class="mono">data/backups/</span> 里不要的旧包。</p>';
 }

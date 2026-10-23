@@ -52,8 +52,8 @@ android {
         targetSdk = 36
         // versionCode 每次发新包必须 +1（同签名可覆盖安装、不丢数据）。
         // 3 → 4：1.5.16 起日报页支持「打开即同步服务端处理结果」。
-        versionCode = 21
-        versionName = "1.0.2"
+        versionCode = 22
+        versionName = "1.0.3"
         // 出厂默认服务端地址：取自不入库的 dh.properties（见文件顶部说明），
         // 缺文件时为空串 —— 仓库里不出现任何内网/公网地址字面量。
         buildConfigField("String", "DEFAULT_MAC_HOST", "\"$defaultMacHost\"")

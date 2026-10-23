@@ -16,7 +16,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
-from . import config, llm, pipeline, store, tenants
+from . import config, llm, pipeline, reclaim, store, tenants
 
 log = logging.getLogger(__name__)
 
@@ -135,6 +135,16 @@ async def sweep_async() -> int:
                 fired += 1
                 log.info("catchup[%s]: final pass started for %s", t.id, d)
                 await _wait_idle(d, t.id)
+    # 音频回收（1.0.3）：每天至多一次，删已 final / 超龄 / 低信息密度的 wav。
+    # 只删有转写文本的 wav，文本与语料 jsonl 永久保留——细节见 reclaim.py 顶部。
+    for t in tenants.all_tenants():
+        try:
+            r = reclaim.maybe_sweep(t.id)
+            if r:
+                log.info("reclaim %s: 删 %d 个 wav / %.1f MB",
+                         t.id, r.get("deleted_files", 0), r.get("freed_bytes", 0) / 1048576)
+        except Exception:
+            log.exception("reclaim %s failed", t.id)
     return fired
 
 
