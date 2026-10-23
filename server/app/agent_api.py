@@ -12,12 +12,13 @@
 """
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime
 
 from fastapi import APIRouter, Header, HTTPException
 
-from . import asr, config, llm, redact, store, tenants
+from . import asr, config, insights, llm, redact, store, tenants
 from ._version import VERSION
 
 router = APIRouter(prefix="/api/agent")
@@ -163,10 +164,25 @@ def summary(date: str, authorization: str | None = Header(default=None),
     for c in llm.parse_summary_cards(r["summary"]):
         body, _ = redact.redact(c["body"])
         cards.append({"title": c["title"], "body": body})
+    # 洞察层（2026-10-23）：关键词 Top-N + 隐私分类汇总。
+    # 零 LLM 成本（纯正则/计数），让智能体优先围绕关键词与隐私类别处理，
+    # 而不是把全天原文重读一遍。privacy 样本已掩码，不出原值。
+    keywords: list[dict] = []
+    privacy: list[dict] = []
+    try:
+        day_texts = [asr.collapse_repeats(x["text"] or "")
+                     for x in store.segments_for_agent(date, 0, MAX_ROWS, tid)]
+        keywords = insights.extract_keywords(day_texts)
+        privacy = insights.privacy_overview(day_texts)
+    except Exception as e:   # 洞察是增益，不是依赖：坏了就空着，不影响总结
+        logging.getLogger(__name__).warning("insights failed for %s: %s", date, e)
     return {
         "tenant": tid,
         "date": date,
         "ready": True,
         "cards": cards,
-        "note": "【今日回顾】body lines are code-injected 【HH:MM-HH:MM】 timeline rows.",
+        "keywords": keywords,
+        "privacy": privacy,
+        "note": "【今日回顾】body lines are code-injected 【HH:MM-HH:MM】 timeline rows. "
+                "keywords=day Top-N (term/entity/freq); privacy=classified counts with masked samples.",
     }

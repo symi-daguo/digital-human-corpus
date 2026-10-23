@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 
 from . import config
+from . import insights
 from .asr import collapse_repeats
 
 log = logging.getLogger(__name__)
@@ -476,6 +477,34 @@ def _strip_profanity(text: str) -> str:
     return out
 
 
+def _clean_blocks(text: str) -> str:
+    """把一段文本走完「分块 → 逐块清洗（带缓存）→ 拼接」的既有链路。
+
+    从 clean_transcript 里原样抽出：价值门要对「高价值部分」复用这条链路，
+    低价值部分则完全不过 LLM。
+    """
+    if not text.strip():
+        return ""
+    chunks = _split_keep_lines(text, _CLEAN_CHUNK_CHARS)
+    if len(chunks) == 1:
+        out = _clean_one_cached(chunks[0], 1, 1)
+        _clean_cache_flush()   # 单块也要落盘，否则当天短稿的缓存永远写不进去
+        return out
+    hits = 0
+    out = []
+    for i, ck in enumerate(chunks):
+        before = _clean_cache_get(ck)
+        if before is not None:
+            hits += 1
+            out.append(before)
+        else:
+            out.append(_clean_one_cached(ck, i + 1, len(chunks)))
+    _clean_cache_flush()
+    log.info("clean_transcript 分块处理：%d 字符 → %d 块（缓存命中 %d）",
+             len(text), len(chunks), hits)
+    return "\n".join(out)
+
+
 def clean_transcript(raw: str) -> str:
     """去口气。长文本分块处理，避免 max_tokens 截断导致后半段静默丢失。
 
@@ -489,32 +518,53 @@ def clean_transcript(raw: str) -> str:
 
     缓存落盘（2026-09-14）：见 _CLEAN_CACHE_FILE 的说明——进程内缓存扛不住
     「每次开机都重启服务」，冷启动会白算 4~5 分钟。
+
+    价值门（2026-10-23，DH_VALUE_GATE，默认开）：实测全天原始稿里
+    「无实体信号 + 有效字 <8」的低信息密度行约占 1/3 字符量，它们进 LLM
+    清洗产出为零。门按行打分（行业词/数字英文实体/有效长度），低价值行
+    只做确定性清理（去重复+去粗口），**跳过 LLM**，追加在稿尾并显式标注。
+    高价值行照旧走 LLM。时间戳完整性不受影响：低价值行的 [HH:MM] 原样保留。
     """
     if not raw.strip():
         return ""
     # 粗口在 LLM 之前先删：让模型看不到粗口，也就不会在「补标点」时
     # 围着它造出新的语气词（实测模型会保留甚至复述粗口）。
     raw = _strip_profanity(raw)
+
+    # ---- 价值门 -----------------------------------------------------------
+    if insights.VALUE_GATE and "\n" in raw:
+        try:
+            runs, kinds, low_chars = insights.partition_lines(raw)
+        except Exception as e:   # 门坏了绝不能拖垮清洗，退回全量路径
+            log.warning("价值门评分异常，本轮退回全量 LLM 清洗：%s", e)
+            runs, kinds, low_chars = [], [], 0
+        hi = "\n".join(r for r, k in zip(runs, kinds) if k == "hi")
+        lo = "\n".join(r for r, k in zip(runs, kinds) if k == "lo")
+        if low_chars > 0 and hi.strip():
+            core = _clean_blocks(hi)
+            lo_clean = collapse_repeats(lo)
+            total = len(hi) + len(lo)
+            log.info("价值门：低信息密度 %d/%d 字符（%.0f%%）跳过 LLM 清洗，"
+                     "LLM 输入 %d→%d 字符",
+                     low_chars, total, low_chars * 100 / max(total, 1),
+                     total, len(hi))
+            return _strip_profanity(
+                core
+                + "\n\n—— 以下为低信息密度片段（仅去重复与粗口，未做语义清洗）——\n"
+                + lo_clean
+            )
+        # 没有低价值行 / 全是低价值行 → 走原路径（全低价值时 LLM 还是过一遍，
+        # 因为整段都闲聊说明当天语义分层不可靠，宁多勿缺）
+
     chunks = _split_keep_lines(raw, _CLEAN_CHUNK_CHARS)
     if len(chunks) == 1:
         out = _clean_one_cached(chunks[0], 1, 1)
         _clean_cache_flush()   # 单块也要落盘，否则当天短稿的缓存永远写不进去
         return _strip_profanity(out)
 
-    hits = 0
-    out = []
-    for i, ck in enumerate(chunks):
-        before = _clean_cache_get(ck)
-        if before is not None:
-            hits += 1
-            out.append(before)
-        else:
-            out.append(_clean_one_cached(ck, i + 1, len(chunks)))
-    _clean_cache_flush()
-    log.info("clean_transcript 分块处理：%d 字符 → %d 块（缓存命中 %d）",
-             len(raw), len(chunks), hits)
+    out = _clean_blocks(raw)
     # 出口再兜底一道（幂等）：防 LLM 复述粗口，或缓存里历史上含粗口的旧结果
-    return _strip_profanity("\n".join(out))
+    return _strip_profanity(out)
 
 
 # 块级缓存：key=sha256(提示词 + 块文本)，value=清理结果。只缓存成功结果

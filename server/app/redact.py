@@ -64,6 +64,63 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 REDACTED = "[REDACTED]"
 
+# classify() 输出的类别中文标签（日报/智能体展示用）
+CATEGORY_LABELS = {
+    "bearer": "网络凭据",
+    "openai_key": "API 密钥",
+    "github_token": "代码仓库令牌",
+    "aws_key": "云服务密钥",
+    "jwt": "登录令牌",
+    "kv_secret": "口述密码",
+    "kv_secret_cn": "口述密码",
+    "kv_secret_cn_spoken": "口述密码",
+    "pem_key": "私钥文件",
+    "hex_secret": "随机密钥串",
+    "id_card_cn": "身份证号",
+    "bank_card": "银行卡号",
+    "phone_cn": "手机号",
+    "email": "邮箱",
+    "plate_cn": "车牌",
+}
+
+
+def _mask(sample: str) -> str:
+    """掩码样本：留首尾各 2 字符证明「确实有这个东西」，中间全遮。"""
+    s = sample.strip()
+    if len(s) <= 6:
+        return s[0] + "***" if s else ""
+    return s[:2] + "***" + s[-2:]
+
+
+def classify(text: str) -> list[dict]:
+    """敏感信息**分类**（与 redact 的「全抹」互补）。
+
+    redact() 回答「这段能不能给别人看」；classify() 回答「这段里有什么类型的
+    敏感内容、有多少」——给日报做隐私高亮与汇总时按类处理用。
+
+    返回 [{category, label, count, samples}]，按命中次数降序。
+    samples 是掩码后的片段（不留原值——本函数常与原文同域调用，但返回值
+    会进日报/智能体输出，按出口脱敏的同一标准处理）。
+    """
+    if not text:
+        return []
+    found: dict[str, dict] = {}
+    for name, pat in _PATTERNS:
+        hits = pat.findall(text)
+        if not hits:
+            continue
+        samples = []
+        for h in hits[:3]:
+            sample = h if isinstance(h, str) else h[0]
+            samples.append(_mask(sample))
+        found[name] = {
+            "category": name,
+            "label": CATEGORY_LABELS.get(name, name),
+            "count": len(hits),
+            "samples": samples,
+        }
+    return sorted(found.values(), key=lambda d: -d["count"])
+
 
 def redact(text: str) -> tuple[str, int]:
     """扫描并替换秘密。返回 (脱敏后文本, 命中次数)。"""
