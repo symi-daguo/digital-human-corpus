@@ -1,6 +1,6 @@
 {
   "name": "digital-human-desktop",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "数字人服务跨平台控制台：UI 由服务端 /console 渲染，这里只有打包壳",
   "scripts": {

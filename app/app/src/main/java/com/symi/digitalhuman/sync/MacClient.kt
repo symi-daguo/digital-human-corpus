@@ -2,11 +2,14 @@ package com.symi.digitalhuman.sync
 
 import com.symi.digitalhuman.data.AppSettings
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
@@ -955,6 +958,67 @@ class MacClient(private val s: AppSettings) {
      * 与 [post] 的区别：需要读回执字段时用这个（如 /api/done 的 in_window）。
      * 解析失败按 null 处理，调用方走「与旧服务端一致」的保守分支。
      */
+    /**
+     * 今日洞察：关键词 Top-N + 隐私分类汇总（1.0.2 新增）。
+     *
+     * 服务端 /api/agent/summary 的 keywords 与 privacy 字段：
+     * - keywords：行业词/实体/高频段，智能体与 UI 优先围绕它们处理，
+     *   避免重读全天原文烧 token；
+     * - privacy：口述密码/手机号/身份证等按类计数，samples 已由服务端掩码
+     *   （不留原值——UI 只是高亮提示，不是敏感信息展示页）。
+     *
+     * ready!=true、非 200、解析失败一律返回 null，调用方显示「暂不可用」。
+     */
+    fun fetchSummary(date: String): DayInsights? {
+        val req = Request.Builder().url(url("/api/agent/summary/$date")).auth().get().build()
+        return try {
+            http.newCall(req).execute().use { r ->
+                if (!r.isSuccessful) return null
+                val obj = runCatching { Json.parseToJsonElement(r.body.string()).jsonObject }
+                    .getOrNull() ?: return null
+                if (obj["ready"]?.jsonPrimitive?.booleanOrNull != true) return null
+                val keywords = obj["keywords"]?.jsonArray?.mapNotNull { k ->
+                    val o = k.jsonObject
+                    InsightKeyword(
+                        kw = o["kw"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null,
+                        count = o["count"]?.jsonPrimitive?.intOrNull ?: 0,
+                        kind = o["kind"]?.jsonPrimitive?.contentOrNull ?: "freq",
+                    )
+                } ?: emptyList()
+                val privacy = obj["privacy"]?.jsonArray?.mapNotNull { p ->
+                    val o = p.jsonObject
+                    InsightPrivacy(
+                        label = o["label"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null,
+                        count = o["count"]?.jsonPrimitive?.intOrNull ?: 0,
+                        samples = (o["samples"] as? JsonArray)
+                            ?.mapNotNull { (it as? JsonPrimitive)?.content }
+                            ?: emptyList(),
+                    )
+                } ?: emptyList()
+                DayInsights(keywords = keywords, privacy = privacy)
+            }
+        } catch (e: Exception) {
+            // 带上端点与 pin 状态：洞察是低频请求，失败时必须能一眼定位
+            // 「连的哪个候选、是否证书锁定误伤、token 是否为空」。
+            android.util.Log.w(
+                "MacClient",
+                "fetchSummary 失败: ${e.javaClass.simpleName}: ${e.message} " +
+                    "endpoint=${endpointLabel()} pin=${pinningEnabled} " +
+                    "tokenBlank=${s.token.isBlank()} date=$date",
+            )
+            null
+        }
+    }
+
+    /** /summary 的 keywords 单项（kind: term=行业词 / entity=数字英文实体 / freq=高频段） */
+    data class InsightKeyword(val kw: String, val count: Int, val kind: String)
+
+    /** /summary 的 privacy 单项（样本已由服务端掩码，UI 只做高亮提示） */
+    data class InsightPrivacy(val label: String, val count: Int, val samples: List<String>)
+
+    /** 今日洞察汇总：任一列表可为空（当天没说到就是没有，不是错误） */
+    data class DayInsights(val keywords: List<InsightKeyword>, val privacy: List<InsightPrivacy>)
+
     private fun postJson(path: String, jsonBody: String = "{}"): JsonObject? = try {
         val req = Request.Builder().url(url(path)).auth()
             .post(jsonBody.toRequestBody("application/json".toMediaType())).build()

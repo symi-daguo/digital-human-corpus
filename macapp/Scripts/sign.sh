@@ -64,6 +64,22 @@ while IFS= read -r f; do
   sign_one "$f" 2>/dev/null || true
 done < <(find "$APP/Contents/Resources/server" -name '*.sh' -type f 2>/dev/null)
 
+step "签名：兜底——所有带执行位的 Mach-O（torch/bin 等无扩展名可执行文件）"
+# 公证实测（2026-10-23）：site-packages/torch/bin/torch_shm_manager、protoc 这类
+# 无扩展名可执行文件不匹配「*.so/*.dylib」规则，Apple 判 Invalid 三连
+# （无 Developer ID 签名 / 无安全时间戳 / 无 hardened runtime）。
+# 兜底：对所有 +x 的 Mach-O 补 Developer ID 签名；非 Mach-O 的静默跳过。
+NATIVE_FILES="$(mktemp)"
+find "$APP" -type f -perm +111 -print0 \
+  | xargs -0 file 2>/dev/null | grep "Mach-O" | cut -d: -f1 > "$NATIVE_FILES" || true
+SIGNED_FALLBACK=0
+while IFS= read -r f; do
+  codesign --force --sign "$IDENTITY" --options runtime --timestamp "$f" >/dev/null 2>&1 \
+    && SIGNED_FALLBACK=$((SIGNED_FALLBACK+1)) || true
+done < "$NATIVE_FILES"
+rm -f "$NATIVE_FILES"
+echo "    兜底签名：$SIGNED_FALLBACK 个 Mach-O"
+
 step "签名：主 bundle"
 codesign --force --sign "$IDENTITY" \
   --options runtime \

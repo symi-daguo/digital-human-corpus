@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -74,11 +75,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
 import com.symi.digitalhuman.data.AppSettings
 import com.symi.digitalhuman.data.CaptureWindow
 import com.symi.digitalhuman.data.ENROLL_SCRIPT
 import com.symi.digitalhuman.data.ENROLL_SECONDS
 import com.symi.digitalhuman.data.TriggerMode
+import com.symi.digitalhuman.sync.MacClient
 import com.symi.digitalhuman.ui.AppViewModel
 import com.symi.digitalhuman.ui.root.AdaptiveCards
 import com.symi.digitalhuman.ui.theme.GhostButton
@@ -154,6 +157,7 @@ fun SettingsPage(wsc: WindowSizeClass, vm: AppViewModel = viewModel()) {
                 { DailyFlowCard(draft) { draft = it } },
                 { StorageCard(draft) { draft = it } },
                 { BackupCard(vm) },
+                { InsightsCard(vm) },
                 {
                     GlassCard {
                         SectionTitle("保存", accent = Glass.Indigo)
@@ -2105,5 +2109,97 @@ private fun Field(
             ),
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+/**
+ * 今日洞察卡（1.0.2）：关键词 Top-N chips + 隐私分类高亮。
+ *
+ * 数据来自 Mac 端 /api/agent/summary 的 insights 层（服务端零 LLM 成本产出）。
+ * 设计取舍：
+ * - 放设置页而非日报页——洞察是「处理时的参照」，不是内容本身；
+ * - 加载失败（Mac 不在线/当天无数据）只显示一行提示，不阻塞其他卡片；
+ * - 隐私样本只显示服务端已掩码的片段——这个卡片会被人截屏外发，
+ *   不做敏感值展示（与出口脱敏同一标准）。
+ */
+@Composable
+private fun InsightsCard(vm: AppViewModel) {
+    var state by remember { mutableStateOf<MacClient.DayInsights?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        // DataStore 冷读比 Compose 首帧慢：立即取 settings.value 会拿到内置默认
+        // （endpoint=出厂 IP），连的就是错地方。重试到拿到真实配置，网络抖动顺带免疫。
+        repeat(4) { attempt ->
+            val s = vm.settings.value
+            val r = MacClient(s).fetchSummary(java.time.LocalDate.now().toString())
+            if (r != null) {
+                state = r
+                return@LaunchedEffect
+            }
+            if (attempt < 3) delay(1500)
+        }
+        failed = true
+    }
+    GlassCard {
+        SectionTitle("今日洞察", accent = Glass.Teal)
+        Spacer(Modifier.height(12.dp))
+        val s = state
+        when {
+            s == null -> Text(
+                if (failed) "暂不可用（Mac 端未连接或今日尚无数据）" else "加载中……",
+                style = MaterialTheme.typography.bodySmall,
+                color = Glass.TextFaint,
+            )
+            else -> {
+                if (s.keywords.isNotEmpty()) {
+                    Text(
+                        "关键词",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Glass.TextFaint,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    ) {
+                        s.keywords.forEach { k ->
+                            Text(
+                                "${k.kw} ×${k.count}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Glass.Text,
+                                modifier = Modifier
+                                    .background(Glass.Surface0, RoundedCornerShape(8.dp))
+                                    .border(1.dp, Glass.Stroke, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+                if (s.privacy.isNotEmpty()) {
+                    Text(
+                        "隐私（已脱敏，仅提示类别）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Glass.TextFaint,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    s.privacy.forEach { p ->
+                        Text(
+                            "${p.label} ×${p.count}" +
+                                if (p.samples.isNotEmpty()) "　${p.samples.joinToString("、")}" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Glass.Red,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
+                } else {
+                    Text(
+                        "今日未检出隐私内容",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Glass.TextFaint,
+                    )
+                }
+            }
+        }
     }
 }
