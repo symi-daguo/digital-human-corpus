@@ -207,3 +207,41 @@ WEKNORA_DATA_DIR=~/Library/Application\ Support/DigitalHuman/weknora ./WeKnora-l
 # 4) 智能体侧：SKILL.md 增加检索工具说明
 ```
 
+
+---
+
+## 八、macOS 签名与公证（1.0.2 起）
+
+### 两者不是一件事
+
+| | 签名（codesign） | 公证（notarize） |
+| --- | --- | --- |
+| 用什么 | **Developer ID 证书**（本机钥匙串） | **Apple ID + App 专用密码**（notarytool profile） |
+| 做什么 | 给包盖身份章 | 上传给 Apple 云端做恶意软件扫描，签发「票」 |
+| 没有会怎样 | Gatekeeper 直接拒绝 | 首次打开提示「无法验证开发者」，需右键 → 打开 |
+
+本机凭据：
+
+- 签名：`Developer ID Application: guoqing wang (48YT35UPKC)`
+- 公证 profile：**`deskcap-notary`**（与 Desktop-Capture-Agent 共用，已存在）
+- Apple ID：`303316404@qq.com`
+
+### 命令
+
+```bash
+cd macapp
+DH_SIGN_IDENTITY="Developer ID Application: guoqing wang (48YT35UPKC)" \
+  ./Scripts/sign.sh dist/数字人服务.app
+./Scripts/make-dmg.sh
+DH_NOTARY_PROFILE=deskcap-notary ./Scripts/notarize.sh dist/数字人服务-X.Y.Z.dmg
+```
+
+### 踩过的两个硬坑
+
+1. **site-packages 里的无扩展名可执行文件**（`torch/bin/torch_shm_manager`、
+   `protoc-*`）不匹配 `*.so/*.dylib` 规则，Apple 会判 Invalid 三连：
+   无 Developer ID / 无安全时间戳 / 无 hardened runtime。
+   sign.sh 已加「Mach-O 兜底签名」段（本次兜底 191 个）。
+2. **483MB dmg 上传会断**（`NWError 54 Connection reset by peer`）。notarytool
+   不支持续传，只能重试；网络差时多跑几次，或换网络。公证本身很快（1-3 分钟），
+   慢的永远是上传。
