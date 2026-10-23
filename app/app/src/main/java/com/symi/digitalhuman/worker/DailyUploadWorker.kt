@@ -1,7 +1,11 @@
 package com.symi.digitalhuman.worker
 
 import android.content.Context
+import androidx.work.Constraints
 import androidx.work.CoroutineWorker
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.symi.digitalhuman.data.AppDatabase
@@ -44,6 +48,9 @@ class DailyUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
 
     private val final: Boolean get() = inputData.getBoolean(KEY_FINAL, true)
     private val strict: Boolean get() = inputData.getBoolean(KEY_STRICT, true)
+
+    /** 重传某天后要额外通知的日期（1.0.4）：让服务端去重算那一天，而不是今天。 */
+    private val doneDate: String? get() = inputData.getString(KEY_DONE_DATE)
 
     override suspend fun doWork(): Result {
         val db = AppDatabase.get(applicationContext)
@@ -106,6 +113,12 @@ class DailyUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         // 窗口外那 150 秒必然白等（服务端根本不会开始）——白耗电、白占内存、
         // 还把「日报不实时」的锅甩给了网络。现在窗口外直接跳过等待。
         val ack = client.notifyUploadDone(today, final = final)
+        // 重传场景（1.0.4）：本次上传的是**历史某天**的段，done 通知的日期必须是那一天，
+        // 否则服务端只会重算今天，历史日期的清稿/总结/关键词不会刷新。
+        doneDate?.takeIf { it.isNotBlank() && it != today }?.let { d ->
+            runCatching { client.notifyUploadDone(d, final = false, force = true) }
+                .onFailure { android.util.Log.w(TAG, "补发 done($d) 失败: ${it.message}") }
+        }
         val serverInWindow = ack.inWindow
 
         // 历史回填：必须在 today 拉取之前，否则 today 未就绪时 return retry 就跳过了。
@@ -227,7 +240,30 @@ class DailyUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
     companion object {
         const val NAME = "daily_upload"
         const val NAME_INCREMENTAL = "incremental_upload"
+
+        /**
+         * 立刻跑一次增量上传（1.0.4「按天重传」用）。
+         *
+         * 重传已经把段改回 PENDING，这里只是不等下一次周期任务、马上触发一轮；
+         * 内嵌一次 /api/done 通知，服务端会据此把该日期拉进补跑队列重算。
+         */
+        fun runNow(ctx: Context, doneDate: String? = null) {
+            val req = OneTimeWorkRequestBuilder<DailyUploadWorker>()
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .build()
+                )
+                .apply {
+                    if (!doneDate.isNullOrBlank()) {
+                        setInputData(workDataOf(KEY_DONE_DATE to doneDate))
+                    }
+                }
+                .build()
+            WorkManager.getInstance(ctx).enqueue(req)
+        }
         const val KEY_FINAL = "final"
+        const val KEY_DONE_DATE = "done_date"
         const val KEY_STRICT = "strict"
         private const val TAG = "DailyUploadWorker"
 

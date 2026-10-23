@@ -84,6 +84,7 @@ import com.symi.digitalhuman.data.TriggerMode
 import com.symi.digitalhuman.sync.MacClient
 import com.symi.digitalhuman.ui.AppViewModel
 import com.symi.digitalhuman.ui.root.AdaptiveCards
+import com.symi.digitalhuman.ui.theme.DateField
 import com.symi.digitalhuman.ui.theme.GhostButton
 import com.symi.digitalhuman.ui.theme.Glass
 import com.symi.digitalhuman.ui.theme.GlassCard
@@ -155,7 +156,7 @@ fun SettingsPage(wsc: WindowSizeClass, vm: AppViewModel = viewModel()) {
                 { TalkCard(vm, draft) { draft = it } },
                 { CaptureWindowCard(draft) { draft = it } },
                 { DailyFlowCard(draft) { draft = it } },
-                { StorageCard(draft) { draft = it } },
+                { StorageCard(vm, draft) { draft = it } },
                 { BackupCard(vm) },
                 { InsightsCard(vm) },
                 {
@@ -2051,7 +2052,12 @@ private fun IntervalChip(
 }
 
 @Composable
-private fun StorageCard(draft: AppSettings, onChange: (AppSettings) -> Unit) {
+private fun StorageCard(vm: AppViewModel, draft: AppSettings, onChange: (AppSettings) -> Unit) {
+    val days by vm.daysWithAudio.collectAsStateWithLifecycle()
+    var picked by remember { mutableStateOf("") }
+    var msg by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { vm.refreshDaysWithAudio() }
+    LaunchedEffect(days) { if (picked.isBlank()) picked = days.firstOrNull() ?: "" }
     GlassCard {
         SectionTitle("手机存储")
         Spacer(Modifier.height(12.dp))
@@ -2068,6 +2074,47 @@ private fun StorageCard(draft: AppSettings, onChange: (AppSettings) -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = Glass.TextDim,
         )
+        Spacer(Modifier.height(14.dp))
+        // ---- 1.0.4 按天重传 ----
+        Text(
+            "重新上传某天",
+            style = MaterialTheme.typography.labelSmall,
+            color = Glass.TextFaint,
+        )
+        Spacer(Modifier.height(6.dp))
+        if (days.isEmpty()) {
+            Text(
+                "本地暂无录音可重传（录音已按保留天数清理）",
+                style = MaterialTheme.typography.bodySmall,
+                color = Glass.TextDim,
+            )
+        } else {
+            DateField(
+                currentDate = picked,
+                availableDates = days.toSet(),
+                onSelect = { picked = it; msg = "" },
+            )
+            Spacer(Modifier.height(8.dp))
+            GhostButton(
+                text = "重新上传该日音频",
+                onClick = {
+                    vm.reuploadDay(picked) { n ->
+                        msg = if (n > 0) "已重新排队 $n 段，正在上传…" else "该日没有可重传的段"
+                    }
+                },
+            )
+            if (msg.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(msg, style = MaterialTheme.typography.bodySmall, color = Glass.Teal)
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "服务端按每段自带的时间戳归日，重传不会串到其他日期；同一段重复上传会被覆盖（幂等）。" +
+                    "重传完成后当天日报会自动重算。",
+                style = MaterialTheme.typography.bodySmall,
+                color = Glass.TextDim,
+            )
+        }
     }
 }
 

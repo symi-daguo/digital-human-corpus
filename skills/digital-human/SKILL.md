@@ -1,6 +1,6 @@
 # Digital Human — 日报语料知识（只读）
 
-**服务版本：1.0.3（macOS，菜单栏 App + LaunchAgent 开机自启）。**
+**服务版本：1.0.4（macOS，菜单栏 App + LaunchAgent 开机自启）。**
 供 Hermes / Cursor Agent / WorkBuddy 等本地 agent 学习「数字人语料采集 App」产出的日报数据。
 
 ## 契约（锁定）

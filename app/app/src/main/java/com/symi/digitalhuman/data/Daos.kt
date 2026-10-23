@@ -57,6 +57,41 @@ interface SegmentDao {
     @Query("UPDATE segment SET status = 'DELETED' WHERE id IN (:ids)")
     suspend fun markDeleted(ids: List<Long>)
 
+    // ---- 1.0.4：按天重传 + 保留期清理 ----
+
+    /** 某天（本地日界 [from, to)）的全部段，排除已删。重传入口用。 */
+    @Query(
+        "SELECT * FROM segment WHERE startOffsetMs >= :from AND startOffsetMs < :to " +
+        "AND status != 'DELETED' ORDER BY startOffsetMs"
+    )
+    suspend fun ofDay(from: Long, to: Long): List<Segment>
+
+    /**
+     * 重传：把段改回 PENDING 并清掉 uploadedAt，让 DailyUploadWorker 重新上传。
+     *
+     * 服务端按 X-Start-Offset-Ms 落库（date = fromtimestamp(start_ms)），
+     * 同一 install 的同一 seg_id 走 upsert + 覆盖同名 wav —— 重传幂等，不会串日期。
+     */
+    @Query("UPDATE segment SET status = 'PENDING', uploadedAt = NULL WHERE id IN (:ids)")
+    suspend fun requeue(ids: List<Long>)
+
+    /**
+     * 已上传（SYNCED）且上传时间早于 cutoff 的段 —— 保留期清理用。
+     *
+     * 1.0.4 修：原 RetentionWorker 遍历 pending() 再要求 uploadedAt<cutoff，
+     * 而 PENDING 的 uploadedAt 恒为 null → 按天数清理从来没生效过，手机录音无限堆积。
+     * PENDING（还没传的）绝不能删——那是唯一副本。
+     */
+    @Query(
+        "SELECT * FROM segment WHERE status = 'SYNCED' " +
+        "AND uploadedAt IS NOT NULL AND uploadedAt < :cutoff ORDER BY uploadedAt"
+    )
+    suspend fun syncedBefore(cutoff: Long): List<Segment>
+
+    /** 所有未删段的时间戳：设置页据此列出「哪些天有本地音频」可重传。 */
+    @Query("SELECT startOffsetMs FROM segment WHERE status != 'DELETED' ORDER BY startOffsetMs")
+    suspend fun activeOffsets(): List<Long>
+
     /**
      * 一次性写回 Mac 回流的说话人判定结果。
      *

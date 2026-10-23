@@ -404,7 +404,15 @@ def upsert_segment(seg_id: int, session_id: int, date: str, start_offset_ms: int
         " VALUES (?,?,?,?,?,?,?,?,?,?,?)"
         " ON CONFLICT(seg_id) DO UPDATE SET session_id=excluded.session_id, date=excluded.date,"
         " start_offset_ms=excluded.start_offset_ms, duration_ms=excluded.duration_ms,"
-        " speech_ratio=excluded.speech_ratio, path=excluded.path, processed=0, text='',"
+        " speech_ratio=excluded.speech_ratio, path=excluded.path,"
+        # 重传保护（2026-10-23 实测事故）：手机「重新上传某天」会 upsert 当天全部段，
+        # 原实现无条件 processed=0, text='' 把已有转写清空——实测 419 段被清掉 263 段，
+        # 日报从 23404 字缩到 7938 字。同一 seg_id 的音频内容不会变（seg_id 单调递增），
+        # 所以：已有文本就保留（连同 processed / is_user），没有才走全新转写。
+        " processed=CASE WHEN LENGTH(COALESCE(text,''))>0 THEN processed ELSE 0 END,"
+        " text=COALESCE(text,''),"
+        " is_user=CASE WHEN LENGTH(COALESCE(text,''))>0 THEN is_user ELSE NULL END,"
+        " received_at=excluded.received_at,"
         " is_user=NULL, received_at=excluded.received_at,"
         # device_label 必须在 SET 里（2026-09-15 修）：漏掉它时，第二台设备上传
         # 同一 seg_id 会继承第一台的设备名，统计里两台设备的数据会串在一起。

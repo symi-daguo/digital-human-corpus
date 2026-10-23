@@ -319,7 +319,7 @@ def devices(days: int = 7, authorization: str | None = Header(default=None),
 
 
 @router.post("/done/{date}")
-async def done(date: str, final: int = 0,
+async def done(date: str, final: int = 0, force: int = 0,
                authorization: str | None = Header(default=None),
                x_tenant: str = Header(default=""), tenant: str = "") -> dict:
     """必须是 async def：pipeline.trigger 内部要拿当前事件循环创建后台任务。
@@ -336,7 +336,13 @@ async def done(date: str, final: int = 0,
     _require_date(date)
     # final=0 增量：ASR + LLM 干净稿/总结都跑（准实时三版一致），
     # 但不做日终重转与删音频；final=1 日终：额外全段重转 + 清理音频。
-    started = pipeline.trigger(date, with_llm=True, final_pass=(final == 1), tenant=tid)
+    # force=1：强制重算（1.0.4，手机端「重新上传某天」用）——即使当天全部段
+    # 都已转写过（segs/roleless 皆空）也继续重建干净稿/总结/关键词，
+    # 并绕过处理窗口（用户显式操作，不该被窗口挡掉）。
+    started = pipeline.trigger(
+        date, with_llm=True, final_pass=(final == 1),
+        tenant=tid, force=(force == 1),
+    )
     # in_window / agg_windows（2026-09-27 窗口 / 2026-10-21 数量）：pipeline_started=False
     # 且 in_window=False 表示「已落库、等触发」，客户端可据此显示「将于 13:00/17:45
     # 或积压满 N 段后处理」而不是「处理中」。老客户端忽略这两个新字段，行为不变。

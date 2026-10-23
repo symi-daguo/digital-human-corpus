@@ -183,8 +183,9 @@ class MacClient(private val s: AppSettings) {
      * 调用方据此决定要不要等结果——窗口外等是白等（旧版固定轮询 150 秒）。
      * 老服务端不返回这两个字段 → 视为「一直在窗口内」，行为与旧版完全一致。
      */
-    fun notifyUploadDone(date: String, final: Boolean = false): DoneAck =
-        postJson("/api/done/$date?final=${if (final) 1 else 0}")?.let { obj ->
+    fun notifyUploadDone(date: String, final: Boolean = false,
+                         force: Boolean = false): DoneAck =
+        postJson("/api/done/$date?final=${if (final) 1 else 0}${if (force) "&force=1" else ""}")?.let { obj ->
             DoneAck(
                 ok = true,
                 pipelineStarted = obj["pipeline_started"]?.jsonPrimitive?.booleanOrNull ?: false,

@@ -67,7 +67,7 @@ _MAX_SEGS_PER_ROUND = 120
 
 
 def trigger(date: str, with_llm: bool = True, final_pass: bool = False,
-            tenant: str = tenants.DEFAULT_TENANT) -> bool:
+            tenant: str = tenants.DEFAULT_TENANT, force: bool = False) -> bool:
     """事件触发入口（/api/done）。返回 False 表示该租户该日期已在处理中。
 
     2026-09-14 改：已在处理中时**不再把这次触发丢掉**，而是记一笔待补跑
@@ -88,7 +88,7 @@ def trigger(date: str, with_llm: bool = True, final_pass: bool = False,
     # （2026-09-27 实测踩过：先写在窗口判定之后 → 窗口外每次 /api/done 都
     #  NameError 抛 500，而窗口内的测试路径永远走不到那一行，测不出来。）
     key = f"{tenant}/{date}"
-    if not config.agg_active():
+    if not force and not config.agg_active():
         # 处理触发门槛：固定窗口（2026-09-27）+ 数量触发（2026-10-21）二者都没满足时，
         # 一律不**启动**新管线——段照常落库，处理延后到窗口内或积压达标时由 sweeper
         # 兜底消化。已在跑的轮次不受影响（本判定只在启动新轮次时做一次）。
@@ -101,22 +101,23 @@ def trigger(date: str, with_llm: bool = True, final_pass: bool = False,
     if key in _running:
         old = _pending.get(key)
         # final 只升不降：轮内来了 final=1，就必须补一次终稿轮
-        _pending[key] = (True, bool(final_pass or (old[1] if old else False)))
+        _pending[key] = (True, bool(final_pass or (old[1] if old else False)),
+                          bool(force or (old[2] if old else False)))
         log.info("pipeline for %s already running; queued for another round (final=%d)",
                  key, _pending[key][1])
         return False
     _running.add(key)
-    _pending[key] = (with_llm, final_pass)
+    _pending[key] = (with_llm, final_pass, force)
 
     async def runner():
         try:
             for round_no in range(_MAX_AUTO_RERUNS + 1):
                 params = _pending.pop(key, None)
-                run_llm, run_final = params if params else (with_llm, final_pass)
+                run_llm, run_final, run_force = params if params else (with_llm, final_pass, force)
                 for attempt in range(config.PIPELINE_MAX_RETRIES + 1):
                     async with _gate:
                         ok = await asyncio.to_thread(
-                            run_for_date, date, run_llm, run_final, tenant)
+                            run_for_date, date, run_llm, run_final, tenant, run_force)
                     if ok:
                         break
                     log.warning("pipeline for %s failed (attempt %d)", key, attempt + 1)
@@ -216,7 +217,7 @@ def render_raw(date: str, tenant: str = tenants.DEFAULT_TENANT) -> str:
 
 
 def run_for_date(date: str, with_llm: bool = True, final_pass: bool = False,
-                 tenant: str = tenants.DEFAULT_TENANT) -> bool:
+                 tenant: str = tenants.DEFAULT_TENANT, force: bool = False) -> bool:
     """同步执行整条管线（per-tenant：读写该租户的库与目录）。返回 True = 全部成功。
 
     2026-09-04 改版：干净稿/总结在**增量轮也重算**（本地 4B 模型一轮十几秒，

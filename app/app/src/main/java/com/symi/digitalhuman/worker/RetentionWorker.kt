@@ -28,18 +28,20 @@ class RetentionWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             .map { it.id }
         if (purgeIds.isNotEmpty()) deleteSegments(db, purgeIds)
 
-        // 1) 过期删除：PENDING 中已上传且上传时间早于保留期
-        val expired = db.segmentDao().pending() // 先取全部再过滤，MVP 数据量小
-        val expiredIds = mutableListOf<Long>()
-        for (seg in expired) {
-            val uploadedAt = seg.uploadedAt ?: continue
-            if (uploadedAt < cutoff) expiredIds.add(seg.id)
-        }
-        deleteSegments(db, expiredIds)
+        // 1) 过期删除：**已上传（SYNCED）**且上传时间早于保留期。
+        //
+        // 1.0.4 修 bug：原实现遍历 pending()（status=PENDING）再要求 uploadedAt<cutoff，
+        // 但 PENDING 的 uploadedAt 恒为 null（从未上传过）→ `?: continue` 全部跳过，
+        // 而 SYNCED 段根本不在 pending() 里 → 「音频保留天数」实际只对软删段生效，
+        // 正常录音会一直堆到存储上限（默认 0=不限）位置都不动。
+        // PENDING 是唯一副本，绝不能按天数删；只清已确认上传到服务端的那部分。
+        val expired = db.segmentDao().syncedBefore(cutoff)
+        if (expired.isNotEmpty()) deleteSegments(db, expired.map { it.id })
 
         // 2) 存储阈值 LRU
         if (s.maxStorageMb > 0) {
-            val all = db.segmentDao().pending()
+            // 同上：LRU 只看已上传段（PENDING 是唯一副本，清了就丢）
+            val all = db.segmentDao().syncedBefore(Long.MAX_VALUE)
             var totalBytes = all.sumOf { File(it.filePath).takeIf { f -> f.exists() }?.length() ?: 0L }
             val limitBytes = s.maxStorageMb * 1024L * 1024L
             if (totalBytes > limitBytes) {

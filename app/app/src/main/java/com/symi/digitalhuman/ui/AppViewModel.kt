@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -145,6 +146,49 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             android.util.Log.w("AppViewModel", "同步日报失败: ${it.message}")
         }
     }
+
+    // ---------- 设置页：按天重传（1.0.4） ----------
+
+    /**
+     * 有本地音频的日期（yyyy-MM-dd，倒序）。
+     *
+     * 服务端按回收策略删了 wav 之后，手机本地这段（受「音频保留天数」约束）
+     * 就是唯一的备份来源；设置页据此列出可重传的日期。
+     */
+    private val _daysWithAudio = kotlinx.coroutines.flow.MutableStateFlow<List<String>>(emptyList())
+    val daysWithAudio: kotlinx.coroutines.flow.StateFlow<List<String>> = _daysWithAudio
+
+    fun refreshDaysWithAudio() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        runCatching {
+            _daysWithAudio.value = db.segmentDao().activeOffsets()
+                .map { dayFmt.format(Date(it)) }
+                .distinct()
+                .sortedDescending()
+        }
+    }
+
+    /**
+     * 重传某天的全部本地段。
+     *
+     * 为什么安全：服务端落库日期 = `datetime.fromtimestamp(X-Start-Offset-Ms)`，
+     * 每个段带自己的绝对时间戳，重传只会落回它原本那一天，**不会串到别的日期**；
+     * 同一 install 的同一 seg_id 走 upsert + 覆盖同名 wav，幂等。
+     *
+     * 重传完成后服务端把该日期拉进补跑队列重算（清稿/总结/关键词都会刷新）。
+     */
+    fun reuploadDay(date: String, onDone: (Int) -> Unit) =
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val n = runCatching {
+                val start = dayFmt.parse(date)?.time ?: return@runCatching 0
+                val ids = db.segmentDao().ofDay(start, start + 86_400_000L).map { it.id }
+                if (ids.isNotEmpty()) {
+                    db.segmentDao().requeue(ids)
+                    com.symi.digitalhuman.worker.DailyUploadWorker.runNow(getApplication(), date)
+                }
+                ids.size
+            }.getOrDefault(0)
+            withContext(kotlinx.coroutines.Dispatchers.Main) { onDone(n) }
+        }
 
     // ---------- 设置页：一键抓取 Mac 证书指纹 ----------
     sealed interface CertProbeState {
