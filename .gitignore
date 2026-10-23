@@ -67,3 +67,13 @@ desktop/node_modules/
 # 20MB 归档 + 解出的运行时与依赖，约 150MB，绝不入库）
 desktop/src-tauri/.runtime/
 desktop/.cache/
+
+# --- 构建缓存与产物（2026-10-23 补：此前后两条只覆盖了文件不覆盖目录，
+#     `git add -A` 会把 target/ 的上万文件吸进来）---
+desktop/src-tauri/target/
+desktop/src-tauri/.runtime/
+desktop/.cache/
+desktop/node_modules/
+__pycache__/
+**/__pycache__/
+.cache/
