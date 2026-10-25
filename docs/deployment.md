@@ -231,12 +231,64 @@ WEKNORA_DATA_DIR=~/Library/Application\ Support/DigitalHuman/weknora ./WeKnora-l
 ```bash
 cd macapp
 DH_SIGN_IDENTITY="Developer ID Application: guoqing wang (48YT35UPKC)" \
-  ./Scripts/sign.sh dist/数字人服务.app
+  ./Scripts/build.sh --sign
 ./Scripts/make-dmg.sh
 DH_NOTARY_PROFILE=deskcap-notary ./Scripts/notarize.sh dist/数字人服务-X.Y.Z.dmg
 ```
 
-### 踩过的两个硬坑
+### 2026-10-25（1.0.5）实测：完整的重打与公证顺序
+
+`Scripts/build.sh` 的内部顺序是「构建 → 自检 → **装到 /Applications** → 签名」，
+也就是**装进系统的那份是签名前的副本**，签名与装订都只作用于 `dist/` 里的副本。
+直接重启会跑在一个未签名的 app 上。
+
+正确的完整顺序（app 与 dmg **两段**公证）：
+
+```bash
+cd macapp
+
+# 1) 构建 + 签名（产出 dist/数字人服务.app，已签名）
+DH_SIGN_IDENTITY="Developer ID Application: guoqing wang (48YT35UPKC)" \
+  ./Scripts/build.sh --sign
+
+# 2) app 打包 zip 提交公证（notarytool 不接受 .app）
+ditto -c -k --sequesterRsrc --keepParent "dist/数字人服务.app" \
+  "dist/.notarize-tmp/数字人服务-1.0.5.zip"
+xcrun notarytool submit "dist/.notarize-tmp/数字人服务-1.0.5.zip" \
+  --keychain-profile symi-notarize --keychain ~/.symi/notary.keychain \
+  --wait --timeout 30m --no-s3-acceleration
+xcrun stapler staple "dist/数字人服务.app"
+
+# 3) **重新打 dmg**（从已装订的 app）→ 提交公证 → 装订
+./Scripts/make-dmg.sh 1.0.5
+xcrun notarytool submit "dist/数字人服务-1.0.5.dmg" \
+  --keychain-profile symi-notarize --keychain ~/.symi/notary.keychain \
+  --wait --timeout 30m --no-s3-acceleration
+xcrun stapler staple "dist/数字人服务-1.0.5.dmg"
+
+# 4) 用装订后的 app 替换 /Applications，再重启
+rm -rf "/Applications/数字人服务.app" && ditto "dist/数字人服务.app" "/Applications/数字人服务.app"
+launchctl bootout gui/$(id -u)/com.symi.digitalhuman
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.symi.digitalhuman.plist
+```
+
+**第 3 步的「重新打 dmg」不能省**：先打 dmg 再公证 app 的话，
+dmg 里装的是没票的 app，从 dmg 拖出来双击会被 Gatekeeper 拦。
+
+### 本机公证凭据在哪
+
+`Scripts/notarize.sh` 默认用 `digitalhuman-notary` profile 存**登录钥匙串**，
+本机并没有这个 profile；实际可用的凭据在**专用钥匙串**里：
+
+```bash
+source ~/.symi/notary.env          # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID / NOTARY_PROFILE
+security unlock-keychain -p "$APPLE_APP_SPECIFIC_PASSWORD" ~/.symi/notary.keychain
+xcrun notarytool history --keychain-profile symi-notarize --keychain ~/.symi/notary.keychain
+```
+
+专用钥匙串的口令就是那个 app-specific password。
+
+### 踩过的硬坑
 
 1. **site-packages 里的无扩展名可执行文件**（`torch/bin/torch_shm_manager`、
    `protoc-*`）不匹配 `*.so/*.dylib` 规则，Apple 会判 Invalid 三连：
@@ -245,3 +297,19 @@ DH_NOTARY_PROFILE=deskcap-notary ./Scripts/notarize.sh dist/数字人服务-X.Y.
 2. **483MB dmg 上传会断**（`NWError 54 Connection reset by peer`）。notarytool
    不支持续传，只能重试；网络差时多跑几次，或换网络。公证本身很快（1-3 分钟），
    慢的永远是上传。
+3. **notarytool 传大文件会 `Bus error: 10` 直接崩**（不是超时）。
+   崩掉的那次**上传其实已经完成**，Apple 侧会留下一条记录继续处理 ——
+   所以别急着重传，先 `notarytool history` 看有没有已经 Accepted 的同名记录。
+   直接重传会多出一条提交记录。
+4. **Apple 侧处理 1.2GB 的 bundle 要 30 分钟以上**（本次实测约 32 分钟才 Accepted），
+   期间 `--wait` 一直在刷 `In Progress`。这是正常的，别中途杀掉进程 ——
+   杀掉会在 Apple 侧留一条永远 In Progress 的死记录。
+5. **GitHub Release 的资产名不接受非 ASCII**：中文会被**剥成空串**
+   （`数字人服务-1.0.5.dmg` → `-1.0.5.dmg`）。`PATCH` 改名接口返回 200，
+   但名字根本没改上；换成 ASCII 名一次成功。所以 Release 上的 dmg 用
+   `DigitalHumanService-X.Y.Z-macos-arm64.dmg`，本地构建产物仍叫中文名。
+6. **校验服务端字节要用 `browser_download_url`**，不能用 asset 的 API `url`：
+   后者返回的是 JSON 包装（1.7KB），不是文件字节 —— 拿它比对会误判成「传输损坏」。
+7. **`spctl --type install` 对 dmg 报 `rejected / source=no usable signature` 是正常的**：
+   dmg 不是可执行文件，签名在里面的 app 上。dmg 的判据是 `stapler validate`，
+   app 的判据才是 `spctl -a -t exec`。
