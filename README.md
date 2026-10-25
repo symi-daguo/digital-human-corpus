@@ -178,14 +178,15 @@ server/    FastAPI 服务（ASR / 聚类 / LLM / 日报 / TTS / 对话）
 macapp/    macOS 菜单栏控制面板（生产形态）
 desktop/   Tauri 桌面壳（Windows / Linux）
 tools/     构建、装机、运维脚本
-docs/      部署文档（模型清单 / 各平台注意事项）
+docs/      部署文档（模型清单 / 各平台注意事项 / 工作台对接）
 ```
 
 ---
 
 ## 八、文档
 
-只保留一篇：[`docs/deployment.md`](docs/deployment.md)——模型下载清单、三端构建细节、Windows / Linux 注意事项、常见故障排查。
+- [`docs/deployment.md`](docs/deployment.md)——模型下载清单、三端构建细节、Windows / Linux 注意事项、常见故障排查、macOS 签名与公证。
+- [`docs/workbench-integration.md`](docs/workbench-integration.md)——**工作台对接**：把口述物料描述推进「智能家居 AI 工作台」建档成产品，含接口契约、配置项、经 Hermes 中转的语义、故障排查与自检方法。
 
 其余信息以代码为准：接口定义在 `server/app/routes.py`，数据结构在 `server/app/store.py` 的 `SCHEMA`，都是自解释的。
 

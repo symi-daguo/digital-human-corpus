@@ -418,6 +418,7 @@ openssl x509 -in cert.pem -noout -fingerprint -sha256
 | GET | `/api/backup/download/{name}` | 下载一份备份 zip（文件名白名单 + 父目录双保险，防目录穿越） |
 | POST | `/api/backup/restore?confirm=1` | **破坏性**：multipart 上传备份 zip 覆盖当前数据。必填 `confirm=1`；只接受 `text/`、`corpus/`、`markers/`、`digitalhuman.db` 四个顶层；恢复前**自动留安全快照**（响应回传 `safety_backup`） |
 | GET | `/api/tts/preview` | 用 TTS 试播当天真实数据，返回 WAV；播报稿放在 `X-TTS-Text` 响应头（URL 编码）供客户端核对 |
+| POST | `/api/tts/synthesize` | **任意文本** → 语音，返回 16kHz 单声道 WAV（`{"text":"…","format":"wav"}`，文本上限 20000 字）。与 `/tts/preview` 共用同一个 `tts.synthesize` 与同一套后端探测：预览能响，正式合成就必须能响 |
 | GET | `/api/profiles` | 设备档案 + 管家角色全量（含 `limits` 上限），供工作台渲染 |
 | GET | `/api/profiles/self` | **当前设备自己**的档案：`registered` / `tenant` / `bot` / `bot_name` / `hermes_allowed`（按请求头 `X-Install-Id` 识别） |
 | PUT | `/api/profiles/{install_key}` | 设置某设备的「数据空间 + 管家角色 + Hermes 开关 + 备注」 |
@@ -429,6 +430,42 @@ openssl x509 -in cert.pem -noout -fingerprint -sha256
 | GET | `/api/agent/days` | **只读**，可学习日期 + ready + 人声段数 |
 | GET | `/api/agent/report/{date}?since=&limit=` | **只读**，增量转写行（排他水位线 + `next_since`，出口脱敏，上限 200 行） |
 | GET | `/api/agent/summary/{date}` | **只读**，总结卡片（文本已脱敏） |
+| POST | `/api/push/workbench` | 把一段口述物料描述推进「智能家居 AI 工作台」建档成产品（见下节）。**可选**，未配置时返回 503 且不影响采集主链路 |
+
+### 工作台对接（v1.0.5 新增）
+
+把一段口述物料描述送进「智能家居 AI 工作台」，由工作台跑 LLM 结构化抽取，
+判为产品类且无缺项时直接落库成产品。
+
+请求体（`Authorization: Bearer <DH_TOKEN>`，与手机端同一个配对 Token）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `text` | **必填**，20 ~ 200000 字 |
+| `title` | ≤100 字 |
+| `docType` | `product` \| `meeting` \| `generic`，缺省 `meeting`（要落成产品必须显式传 `product`） |
+| `ref` | 来源标识。**给了就幂等**：同一个 `ref` 第二次推返回 `duplicate=true`，不再打工作台 |
+| `viaHermes` | 是否经 Hermes 中转，优先于部署默认值 |
+
+响应是摘要（作业 id / 文档类型 / 缺项数 / 抽取得分），不是工作台的全量响应。
+
+配置项（`server/env.local`，模板见 `env.local.example`）：
+`DH_WORKBENCH_BASE_URL` / `DH_WORKBENCH_API_KEY` / `DH_WORKBENCH_TENANT_ID` /
+`DH_WORKBENCH_TENANT_MAP` / `DH_WORKBENCH_TIMEOUT` / `DH_WORKBENCH_PUSH_VIA_HERMES`。
+
+失败处理与别处一致：**任何失败都明确报错，不静默降级**。
+经 Hermes 中转时，Hermes 不可达 → 503 并说清「不做静默直投」——
+调用方以为经过了 Hermes、其实没有，那比直接报错更坏。
+
+**完整契约、配置说明、故障排查与自检方法见
+[`docs/workbench-integration.md`](../docs/workbench-integration.md)**。
+
+自检（自带假 Hermes，不依赖本机真的 Hermes 在跑）：
+
+```bash
+"$APPPY" tools/check_push_and_tts.py
+# → 通过 33 项，失败 0 项
+```
 
 ### 设备档案与管家角色（v1.5.0）
 

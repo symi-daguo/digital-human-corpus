@@ -54,8 +54,15 @@ def _port_available(host: str, port: int) -> tuple[bool, str]:
     `sys.exit(1)` 并打一串 traceback 到这种「明明能用只是没开」的场景上，
     把日志搅浑。先探一下就能给出一行中文说明，且壳侧本来就有降级路径
     （回退到系统浏览器打开 https 工作台），不影响可用性。
+
+    ⚠️ 探测时必须带 SO_REUSEADDR，与 uvicorn 真正建监听套接字时保持一致。
+    服务重启后旧套接字会留在 TIME_WAIT（macOS 约 60s），不带这个选项时
+    bind 会报「Address already in use」——于是**明明没人监听**也探成「端口被占」，
+    回环工作台被静默跳过。表现是「刚重启完，桌面壳里的工作台就打不开」，
+    而日志只有一行 warning，排查时极难联想到是 TIME_WAIT。
     """
     probe = socket.socket()
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         probe.bind((host, port))
         return True, ""

@@ -604,6 +604,38 @@ HA_CACHE_TTL = float(os.environ.get("DH_HA_CACHE_TTL", "60"))
 # 不让"HA 慢"传导成"管家不回话"。
 HA_TIMEOUT = float(os.environ.get("DH_HA_TIMEOUT", "3"))
 
+# ---- 智能家居 AI 工作台对接（可选，2026-10-25 加）----
+# 把采集到的口述物料推进工作台做结构化抽取（工作台侧会跑 LLM 抽取，
+# 判定为产品类且无缺项时直接落库成产品）。
+#
+# 这是**可选对接**：没配好时 /api/push/workbench 返回 503 并说明缺哪一项，
+# 采集主链路（录音 → ASR → 日报）完全不受影响。
+#
+# 为什么基址有默认值而凭据没有：基址是「工作台在哪」这种部署事实，
+# 写死本机默认省一次配置；而 API Key 是机器凭证，只能落 env.local（不入库）。
+WORKBENCH_BASE_URL = os.environ.get("DH_WORKBENCH_BASE_URL", "http://127.0.0.1:3080").rstrip("/")
+WORKBENCH_API_KEY = os.environ.get("DH_WORKBENCH_API_KEY", "").strip()
+WORKBENCH_TENANT_ID = os.environ.get("DH_WORKBENCH_TENANT_ID", "").strip()
+# 采集端租户 → 工作台租户 id 的映射（JSON 串，如 {"default":"<uuid>"}）。
+# 缺省时所有租户都用 DH_WORKBENCH_TENANT_ID：多数部署只有一个工作台空间，
+# 没必要为它引入映射概念。真要一对一时再开这个开关。
+WORKBENCH_TENANT_MAP_RAW = os.environ.get("DH_WORKBENCH_TENANT_MAP", "").strip()
+# 单次推送超时（秒）。工作台侧要走 LLM 结构化抽取，比普通 API 慢一个量级；
+# 但也不能无限等——否则一条坏请求能把采集端请求线程挂死。
+WORKBENCH_TIMEOUT = float(os.environ.get("DH_WORKBENCH_TIMEOUT", "120"))
+# 投递工作台时是否**强制经 Hermes 中转**。
+#
+# 需求是「hermes 把采集数据传给工作台做方案」。Hermes 自己的接口只有语音
+# invoke/ack（一条「理解 + 应答」链路），**没有对外投递数据的通道**，
+# 所以这里的分工是：**Hermes 负责理解与判定，采集端负责执行投递** ——
+# 文本先过 Hermes 一遍（它会做意图归一、查实时设备数据、给出一句应答），
+# 再由采集端把它投进工作台建档。
+#
+# 默认 0：直投是零依赖的最小路径，多数部署不需要这一跳。
+# 置 1 后 Hermes 不可达就**明确报 503**，绝不静默直投 ——
+# 否则调用方以为经过了 Hermes，其实没有；那比直接报错更坏。
+WORKBENCH_PUSH_VIA_HERMES = os.environ.get("DH_WORKBENCH_PUSH_VIA_HERMES", "0") != "0"
+
 # 一轮对话（turn）的有效期。手机端断线后服务端靠这个回收 wav，
 # 避免 data/talk/ 无限增长（sweeper 不扫这目录，见下）。
 TALK_TTL_SEC = int(os.environ.get("DH_TALK_TTL_SEC", "120"))
@@ -741,6 +773,20 @@ TTS_VOICE = os.environ.get("DH_TTS_VOICE", "Tingting").strip()
 TTS_RATE = int(os.environ.get("DH_TTS_RATE", "200"))       # say 语速（词/分）
 PIPER_BIN = os.environ.get("DH_PIPER_BIN", "").strip()
 PIPER_MODEL = os.environ.get("DH_PIPER_MODEL", "").strip()
+
+# /api/tts/synthesize 的文本上限（2026-10-25 加）。
+# 与 TTS_MAX_CHARS（对话回复用的 120 字）不是一回事：那个是「模型跑偏就掐掉」，
+# 这个是「任意文本入口」的防滥用闸门——合成是同步阻塞的外部调用，
+# 不设上限等于让任何人拿它跑一篇长文，把服务线程占满。
+TTS_SYNTH_MAX_CHARS = int(os.environ.get("DH_TTS_SYNTH_MAX_CHARS", "20000"))
+
+# X-TTS-Text 头里回显多少字。
+#
+# 为什么必须截：头不是正文，一个中文汉字 URL 编码后占 9 字节，
+# 20000 字就是 180KB 的响应头。Node/undici 客户端默认 maxHeaderSize 只有 16KB，
+# 超过就是「Parse Error: Header overflow」——服务端自己看着好好的，
+# 调用方却把响应丢了。所以只回显前几百字：够人确认「念的是哪段」就行。
+TTS_SYNTH_ECHO_MAX = int(os.environ.get("DH_TTS_SYNTH_ECHO_MAX", "500"))
 
 # ---- Ming-3.0-tts（2026-10-22 接入）------------------------------------
 # 蚂蚁 inclusionAI 的 0.5B TTS（MIT，MLX 8bit）。选它的唯一理由是**发音鲁棒性**：

@@ -10,6 +10,8 @@
 - GET  /api/backup/download/{name}  下载一份备份包（导出）
 - POST /api/backup/restore   从备份包恢复（破坏性，需 confirm=1，先自动留快照）
 - GET  /api/tts/preview      合成一段「今天数据」的播报语音（设置页 TTS 测试按钮）
+- POST /api/tts/synthesize    任意文本 → 语音（返回 audio/wav）
+- POST /api/push/workbench    把一段物料描述推进「智能家居 AI 工作台」做结构化抽取
 
 日期参数一律经 config.is_valid_date() 校验后才允许拼进路径或 SQL。
 """
@@ -26,7 +28,8 @@ from fastapi import APIRouter, Body, Header, HTTPException, Request, Response, U
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from . import asr, config, ha_client, llm, pipeline, profiles, store, tenants, tts, voiceprint
+from . import (asr, config, ha_client, llm, pipeline, profiles, store, tenants, tts,
+               voiceprint, workbench_push)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -774,6 +777,217 @@ def tts_preview(date: str = "", authorization: str | None = Header(default=None)
         content=data, media_type="audio/wav",
         headers={"X-TTS-Text": urllib.parse.quote(text), "Cache-Control": "no-store"},
     )
+
+
+@router.post("/tts/synthesize")
+def tts_synthesize(payload: dict = Body(default_factory=dict),
+                   authorization: str | None = Header(default=None)) -> Response:
+    """把任意一段文本合成为语音，直接返回 16kHz 单声道 WAV。
+
+    与 /tts/preview 共用**同一个** `tts.synthesize` 与同一套后端探测
+    （app/tts.py 的 `backend()`）：预览能响，正式合成就必须能响。
+    两边各写一套探测逻辑，迟早会漂移成「预览正常、正式合成没声音」，
+    而这种故障在设置页完全看不出来——用户只会觉得「这个功能坏了」。
+
+    文本长度有上限（`config.TTS_SYNTH_MAX_CHARS`，默认 20000 字）：
+    合成是同步阻塞的外部调用，不设闸门等于让任何调用方拿它跑长文、
+    把服务的工作线程占满。与对话回复那个 120 字的 `TTS_MAX_CHARS` 不是一回事，
+    那个是「模型跑偏就掐掉」，这个是「公开入口」的防滥用闸门。
+
+    播报内容经 X-TTS-Text 头回传（URL 编码，header 不允许非 ASCII），
+    与 /tts/preview 同一口径：调用方要能确认「念的到底是哪段」。
+    只回显前 `config.TTS_SYNTH_ECHO_MAX` 字：头不是正文，
+    长文本 URL 编码后能把响应头撑到上百 KB，Node 客户端会直接报 Header overflow
+    （服务端看着好好的，调用方却把响应丢了）。音频本身仍是全文。
+    """
+    _check_auth(authorization)
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text 不能为空")
+    limit = config.TTS_SYNTH_MAX_CHARS
+    if len(text) > limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"text 超长：{len(text)} 字符，上限 {limit}（分句合成，别整篇丢进来）",
+        )
+    fmt = str(payload.get("format") or "wav").strip().lower()
+    if fmt != "wav":
+        # 只出 wav：手机端与 ASR 输入链路的格式就是 16k mono WAV，
+        # 多支持一种格式就要多一套转码，多出来的收益远小于复杂度。
+        raise HTTPException(status_code=400, detail="format 只支持 wav")
+
+    out = config.DATA_DIR / f"tts_synth_{secrets.token_hex(4)}.wav"
+    try:
+        res = tts.synthesize(text, out)
+        data = Path(res).read_bytes() if res is not None and Path(res).is_file() else b""
+    finally:
+        # 临时文件用完即删：DATA_DIR 会被备份与清理任务扫到，
+        # 留一堆 wav 在那里只会让数据目录越滚越大。
+        out.unlink(missing_ok=True)
+    if not data:
+        raise HTTPException(
+            status_code=503,
+            detail=f"TTS 合成失败（当前后端 {tts.health().get('backend')}），"
+                   "请在服务端检查 TTS 配置",
+        )
+    log.info("tts synthesize: chars=%d bytes=%d backend=%s",
+             len(text), len(data), tts.health().get("backend"))
+    return Response(
+        content=data, media_type="audio/wav",
+        headers={"X-TTS-Text": urllib.parse.quote(text[:config.TTS_SYNTH_ECHO_MAX]),
+                 "Cache-Control": "no-store"},
+    )
+
+
+@router.post("/push/workbench")
+def push_workbench(payload: dict = Body(default_factory=dict),
+                   authorization: str | None = Header(default=None),
+                   x_tenant: str = Header(default=""), tenant: str = "") -> dict:
+    """把一段口述物料描述推进「智能家居 AI 工作台」，由它做结构化抽取。
+
+    工作台会对文本跑 LLM 抽取；判为产品类且无缺项时直接落库成产品。
+    本端点只负责「把东西送过去」与「把结果摘要带回来」，抽取逻辑在工作台侧。
+
+    请求体：
+        tenant   采集端租户 id（缺省取 X-Tenant 头，再缺省 default）
+        kind     目前只有 'transcript'
+        title    标题（≤100 字）
+        text     正文（20~200000 字）
+        docType  product | meeting | generic，缺省 meeting
+        ref      来源标识（通常是某段录音的 seg_id）。**给了就幂等**：
+                  同一个 ref 第二次推送会被认成重复，不会产生第二次入库。
+        viaHermes 是否经 Hermes 中转投递。缺省取部署配置
+                  DH_WORKBENCH_PUSH_VIA_HERMES（默认关）。
+                  开启后文本先过 Hermes 一遍（它做意图归一与判定），
+                  再由本服务执行投递；**Hermes 不可达时明确报 503，
+                  绝不静默直投** —— 否则调用方以为经过了 Hermes，其实没有。
+
+    返回体是摘要（作业 id / 文档类型 / 缺项数 / 抽取得分）。
+    `duplicate` 标明这次是「真推了」还是「之前已经推过」。
+    走了中转时 `hermes` 段带 Hermes 的理解结果（应答、意图、耗时）。
+    """
+    _check_auth(authorization)
+    # 采集端租户必须先过注册表校验（_resolve_tenant）：未注册一律 403，
+    # 绝不静默落到 default，否则拼错 id 的素材会推进到别人的空间。
+    tid = _resolve_tenant(str(payload.get("tenant") or tenant or ""), x_tenant)
+
+    kind = str(payload.get("kind") or "transcript").strip().lower()
+    if kind != "transcript":
+        raise HTTPException(
+            status_code=400, detail=f"unsupported kind: {kind}（目前只支持 transcript）")
+
+    text = str(payload.get("text") or "").strip()
+    if len(text) < workbench_push.TEXT_MIN:
+        raise HTTPException(
+            status_code=400, detail=f"text 太短：至少 {workbench_push.TEXT_MIN} 字")
+    if len(text) > workbench_push.TEXT_MAX:
+        raise HTTPException(
+            status_code=400, detail=f"text 太长：最多 {workbench_push.TEXT_MAX} 字")
+
+    doc_type = str(payload.get("docType") or "meeting").strip().lower()
+    if doc_type not in workbench_push.DOC_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"bad docType: {doc_type}（可选 {'/'.join(workbench_push.DOC_TYPES)}）")
+
+    title = str(payload.get("title") or "").strip()
+    ref = str(payload.get("ref") or "").strip()
+
+    # 是否经 Hermes 中转投递。请求里的 viaHermes 优先于部署默认值。
+    # 注意不能用 bool()：JSON 里 false 是布尔，但表单/查询串传进来的是字符串
+    # "false"，而 bool("false") 是 True —— 「显式说不要」会被当成「要」，方向反了。
+    via_hermes = config.WORKBENCH_PUSH_VIA_HERMES
+    if "viaHermes" in payload:
+        via_hermes = workbench_push.truthy(payload.get("viaHermes"))
+
+    # 缺配置先说清楚缺哪一项：这是可选对接，配错了不该让调用方猜。
+    missing = workbench_push.missing_config()
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail="工作台对接未配置，缺少：" + "、".join(missing)
+                   + "（写进 server/env.local 后重启服务）")
+    # 工作台租户在这里定一次：映射表里有这个采集租户就用它，否则用默认租户。
+    # 两者都没有 → 503。注意这一步必须显式做：映射表非空但**不含**当前租户时，
+    # missing_config 是查不出来的（它只看「有没有映射」），只有 resolve 才知道。
+    try:
+        wb_tenant = workbench_push.resolve_workbench_tenant(tid)
+    except workbench_push.WorkbenchError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+
+    # ---- 幂等：先占坑，再推送 ----
+    # 占坑与判重必须是同一条原子语句（store.claim_push 用 INSERT OR IGNORE）：
+    # 「先查后插」在并发下会双双判定为新 ref，同一段素材被推进两次。
+    if ref and not store.claim_push(ref, kind, tid):
+        prev = store.push_record(ref, tid) or {}
+        if prev.get("job_id"):
+            # 已经成功推过：原样回显上次的结果，不再打工作台一次。
+            return {
+                "ok": True,
+                "duplicate": True,
+                "status": "already_pushed",
+                "ref": ref,
+                "tenant": tid,
+                "workbenchTenant": wb_tenant,
+                "jobId": prev.get("job_id", ""),
+                "jobStatus": prev.get("status", ""),
+                "docType": prev.get("doc_type", ""),
+                "score": prev.get("score"),
+                "deficiencyCount": prev.get("deficiency", 0),
+                # 已经推过的不再走 Hermes：素材早就投出去了，
+                # 再理解一遍只会多花一次模型调用，不会改变任何结果。
+                "viaHermes": via_hermes,
+                "hermes": None,
+            }
+        # 占过坑但没有 job_id：上一次是半路崩掉的（进程被杀/超时），
+        # 工作台那边多半什么都没收到。清掉这条残记录重试，
+        # 否则这个 ref 会被永久卡成「推过了」。
+        store.drop_push(ref, tid)
+        store.claim_push(ref, kind, tid)
+
+    try:
+        # 经 Hermes 中转时，文本先过 Hermes 一遍（它做意图归一与判定），
+        # 再由采集端执行投递。Hermes 不可达 → 明确报错，**不静默直投**。
+        hermes_info = (workbench_push.hermes_understand(text, tenant=tid, ref=ref)
+                       if via_hermes else None)
+        resp = workbench_push.push_transcript(
+            text, title=title, doc_type=doc_type, tenant=tid)
+    except workbench_push.WorkbenchError as e:
+        # 推送失败要撤销占坑：否则一次网络抖动就把这段素材永久标记成
+        # 「已推送」，而工作台其实什么都没收到，素材从此再也不会被推进。
+        if ref:
+            store.drop_push(ref, tid)
+        log.warning("push workbench failed: ref=%s tenant=%s %s", ref, tid, e.detail)
+        raise HTTPException(status_code=e.status, detail=e.detail)
+
+    summary = workbench_push.summarize(resp)
+    if ref:
+        store.finish_push(
+            ref, job_id=summary["jobId"], doc_type=summary["docType"],
+            deficiency=summary["deficiencyCount"], score=summary.get("score") or 0,
+            status=summary["status"], tenant=tid,
+        )
+    log.info("push workbench: ref=%s tenant=%s docType=%s job=%s deficiency=%d",
+             ref, tid, summary["docType"], summary["jobId"], summary["deficiencyCount"])
+    return {
+        "ok": True,
+        "duplicate": False,
+        "status": "pushed",
+        "ref": ref,
+        "tenant": tid,
+        "workbenchTenant": wb_tenant,
+        "jobId": summary["jobId"],
+        "jobStatus": summary["status"],
+        "docType": summary["docType"],
+        "score": summary["score"],
+        "deficiencyCount": summary["deficiencyCount"],
+        "deficiencies": summary["deficiencies"],
+        "fieldCount": summary["fieldCount"],
+        "confirmed": summary["confirmed"],
+        # 经 Hermes 中转时，这里带它对这段物料的理解结果（应答、意图、耗时）。
+        "viaHermes": via_hermes,
+        "hermes": hermes_info,
+    }
 
 
 @router.post("/pair")

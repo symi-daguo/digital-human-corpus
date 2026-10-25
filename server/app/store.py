@@ -151,6 +151,26 @@ CREATE TABLE IF NOT EXISTS talk_message (
 );
 CREATE INDEX IF NOT EXISTS idx_talk_date ON talk_message(date);
 CREATE INDEX IF NOT EXISTS idx_talk_session ON talk_message(session_id);
+
+-- 推进「智能家居 AI 工作台」的推送记录（2026-10-25）。
+--
+-- 幂等靠 ref（调用方给的来源标识，通常是某段录音的 seg_id）做主键：
+-- 同一个 ref 第二次推送会被认成重复，工作台侧不再产生第二条入库。
+--
+-- 为什么存进 SQLite 而不是另起一个标记文件：本文件已经是本项目的权威记录层
+-- （每租户一个库、并发有锁、随备份走），再造一套平行存储等于多一处要维护的状态；
+-- 而「哪些素材已经推进过去了」本来就是一条需要随数据备份一起走的记录。
+-- 每租户独立库 → ref 的唯一性天然按租户隔离，不同租户的同名 seg_id 互不干扰。
+CREATE TABLE IF NOT EXISTS workbench_push (
+    ref          TEXT PRIMARY KEY,
+    kind         TEXT    NOT NULL DEFAULT 'transcript',
+    job_id       TEXT    NOT NULL DEFAULT '',
+    doc_type     TEXT    NOT NULL DEFAULT '',
+    deficiency   INTEGER NOT NULL DEFAULT 0,
+    score        INTEGER NOT NULL DEFAULT 0,
+    status       TEXT    NOT NULL DEFAULT '',
+    pushed_at    REAL    NOT NULL
+);
 """
 
 # 旧库迁移：为 uploaded_segment 补 is_speech / speaker_label 列（CREATE IF NOT EXISTS 不会加列）
@@ -966,4 +986,55 @@ def cleanup_talk_messages(before_ts: float,
         )
         conn.commit()
         return cur.rowcount
+
+
+# --------------------------------------------------------------------------
+# 推进工作台的推送记录（幂等）
+# --------------------------------------------------------------------------
+def claim_push(ref: str, kind: str = "transcript",
+               tenant: str = tenants.DEFAULT_TENANT) -> bool:
+    """给一个 ref 占坑：第一次返回 True（登记成功），已存在返回 False。
+
+    用 `INSERT OR IGNORE` + rowcount 判重，**不是**「先查后插」：
+    后者在两个并发请求下会双双查到「不存在」而都判定为新 ref，
+    结果就是同一段素材被推进两次、工作台侧多出一条入库。
+    占坑与判重必须在同一条语句里原子完成。
+    """
+    with _lock:
+        conn = connect(tenant)
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO workbench_push (ref, kind, pushed_at) VALUES (?,?,?)",
+            (ref, kind, time.time()),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def finish_push(ref: str, job_id: str = "", doc_type: str = "",
+                deficiency: int = 0, score: int = 0, status: str = "",
+                tenant: str = tenants.DEFAULT_TENANT) -> None:
+    """回填推送结果（工作台那边的作业 id、文档类型、缺项数等）。
+
+    放在推送**成功之后**回填：占坑那一刻还不知道结果，而重复推送时
+    要把这份结果原样回显给调用方（"上次已经推进过了，这是那次的作业 id"）。
+    """
+    _write(
+        "UPDATE workbench_push SET job_id=?, doc_type=?, deficiency=?, score=?, status=? "
+        "WHERE ref=?",
+        (job_id, doc_type, int(deficiency), int(score), status, ref), tenant,
+    )
+
+
+def drop_push(ref: str, tenant: str = tenants.DEFAULT_TENANT) -> None:
+    """推送失败时撤销占坑，让同一个 ref 还能重试。
+
+    不撤销的后果很实际：一次网络抖动就把这段素材永久标记成「已推送」，
+    而工作台那边其实什么都没收到——素材从此再也不会被推进过去。
+    """
+    _write("DELETE FROM workbench_push WHERE ref=?", (ref,), tenant)
+
+
+def push_record(ref: str, tenant: str = tenants.DEFAULT_TENANT) -> dict[str, Any] | None:
+    """读回某个 ref 的推送记录（没有则 None）。"""
+    return _query_one("SELECT * FROM workbench_push WHERE ref=?", (ref,), tenant)
 
