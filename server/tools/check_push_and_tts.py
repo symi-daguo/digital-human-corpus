@@ -375,6 +375,124 @@ def start_fake_hermes(port: int, work_dir: Path, py: str) -> subprocess.Popen:
 
 
 # --------------------------------------------------------------------------
+# 假工作台（门禁自带，零新增依赖）
+# --------------------------------------------------------------------------
+#
+# 为什么必须有它：**门禁不能打真实工作台**。
+# 之前这个脚本用 env.local 里的真地址与真 Key，跑一次就在生产库里留下
+# 一批抽取作业、抽取文档与审计记录 —— 门禁本身成了数据污染源，
+# 跑一次脏一次库，最后只能靠人工清理兜着。
+#
+# 判据不能是「我以为打的是假的」，要落在数据上：
+# 假工作台把收到的每个请求写进 received.jsonl，
+# 脚本跑完读它 —— 收不到请求就说明采集端打去了别处。
+FAKE_WORKBENCH_PORT = 8791
+
+FAKE_WORKBENCH_SRC = r'''
+import json
+import sys
+import uuid
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+PORT = int(sys.argv[1])
+LOG = sys.argv[2]
+
+# 收到的作业按 sourceRef 记一份：幂等断言要拿它查「同一条作业只有一条」。
+RECEIVED = []
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code, body):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path.startswith("/api/content/extractions"):
+            self._send(200, json.dumps(RECEIVED, ensure_ascii=False).encode("utf-8"))
+        else:
+            self._send(404, b'{"error": "unknown path"}')
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if n else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            payload = {}
+        job_id = str(uuid.uuid4())
+        # 工作台把 title 存进 sourceRef（见 content.controller.ts 的 transcript 分支），
+        # 假工作台必须照抄这条规则 —— 否则幂等断言按 sourceRef 查不到同一条作业。
+        title = payload.get("title") or "对话纪要"
+        RECEIVED.append({
+            "id": job_id, "sourceRef": title,
+            "status": "CONFIRMED", "score": 97,
+            "docType": payload.get("docType") or "meeting",
+        })
+        try:
+            with open(LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "path": self.path, "title": title,
+                    "tenant": self.headers.get("X-Tenant-Id") or "",
+                    "authorized": bool(self.headers.get("Authorization")),
+                }, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        self._send(201, json.dumps({
+            "id": job_id, "status": "CONFIRMED", "score": 97,
+            "document": {
+                "docType": payload.get("docType") or "meeting",
+                "title": title, "confirmed": True,
+                "fields": [
+                    {"key": "name", "label": "名称", "value": "自检产品",
+                     "confidence": 0.98},
+                    {"key": "brand", "label": "品牌", "value": "自检品牌",
+                     "confidence": 0.95},
+                    {"key": "model", "label": "型号", "value": "X1",
+                     "confidence": 0.93},
+                    {"key": "price", "label": "单价", "value": "899",
+                     "confidence": 0.91},
+                    {"key": "unit", "label": "单位", "value": "个",
+                     "confidence": 0.9},
+                ],
+            },
+            "deficiencies": [],
+        }, ensure_ascii=False).encode("utf-8"))
+
+    def log_message(self, *args):
+        pass
+
+
+HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+'''
+
+
+def start_fake_workbench(port: int, work_dir: Path, py: str) -> subprocess.Popen:
+    """起一个最小假工作台。
+
+    只实现门禁要用的两个端点：
+      POST /api/content/extractions/transcript  建一条抽取作业
+      GET  /api/content/extractions             列出作业（幂等断言要查）
+    响应字段与真实工作台对齐（content.controller.ts / content.service.ts）。
+    """
+    work_dir.mkdir(parents=True, exist_ok=True)
+    src = work_dir / "fake_workbench.py"
+    src.write_text(FAKE_WORKBENCH_SRC, encoding="utf-8")
+    log_file = open(work_dir / "fake-workbench.log", "ab", buffering=0)
+    proc = subprocess.Popen(
+        [py, str(src), str(port), str(work_dir / "received.jsonl")],
+        stdout=log_file, stderr=log_file, start_new_session=True)
+    proc._dh_log_file = log_file      # type: ignore[attr-defined]
+    for _ in range(50):
+        if port_open(port):
+            return proc
+        time.sleep(0.1)
+    return proc
+
+
+# --------------------------------------------------------------------------
 # 配置读取（工作台凭据）
 # --------------------------------------------------------------------------
 def read_env_file(path: Path) -> dict[str, str]:
@@ -401,13 +519,21 @@ def read_env_file(path: Path) -> dict[str, str]:
     return out
 
 
-def workbench_conf() -> dict[str, str]:
-    """工作台对接配置：先看仓库 env.local，再看本进程环境。"""
+def workbench_conf(overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """工作台对接配置：先看仓库 env.local，再看本进程环境，最后被显式覆盖。
+
+    `overrides` 不是可选项而是**必需**：门禁不能打真实工作台 ——
+    用真地址与真 Key 跑一次，就在生产库里留下一批抽取作业与审计记录，
+    门禁本身成了数据污染源。这里强制把地址与凭据换成门禁自带的假工作台，
+    凭据是假的、租户是假的，只有**代码路径**是真的。
+    """
     conf = read_env_file(SERVER_DIR / "env.local")
     for k in ("DH_WORKBENCH_BASE_URL", "DH_WORKBENCH_API_KEY",
               "DH_WORKBENCH_TENANT_ID"):
         if not conf.get(k) and os.environ.get(k):
             conf[k] = os.environ[k].strip()
+    if overrides:
+        conf.update(overrides)
     return conf
 
 
@@ -625,6 +751,19 @@ def main() -> int:
             c.check(False, "假 Hermes 能启动",
                     f"见 {tmp_root / 'fake-hermes' / 'fake-hermes.log'}")
 
+        # ---- 假工作台：门禁自带，绝不打真实工作台 ----
+        # 真实工作台在生产库里会留下抽取作业与审计，跑一次门禁脏一次库。
+        fake_wb = start_fake_workbench(FAKE_WORKBENCH_PORT, tmp_root / "fake-workbench", py)
+        procs.append(fake_wb)
+        if not port_open(FAKE_WORKBENCH_PORT):
+            c.check(False, "假工作台能启动",
+                    f"见 {tmp_root / 'fake-workbench' / 'fake-workbench.log'}")
+        wb_override = {
+            "DH_WORKBENCH_BASE_URL": f"http://127.0.0.1:{FAKE_WORKBENCH_PORT}",
+            "DH_WORKBENCH_API_KEY": "fake-workbench-key",
+            "DH_WORKBENCH_TENANT_ID": "00000000-0000-0000-0000-000000000001",
+        }
+
         # ---- 实例 A：正常配置，跑功能断言 ----
         print("\n[0] 准备源码实例")
         data_dir = tmp_root / "main"
@@ -637,7 +776,8 @@ def main() -> int:
             wait_port_free(args.base_port, 30)
             proc_a = start_instance("main", SRC_HTTP_PORT, args.base_port,
                                     data_dir, None,
-                                    {"DH_HERMES_BASE_URL": f"http://127.0.0.1:{FAKE_HERMES_PORT}"},
+                                    {"DH_HERMES_BASE_URL": f"http://127.0.0.1:{FAKE_HERMES_PORT}",
+                                     **wb_override},
                                     py, py_env)
             procs.append(proc_a)
             if not wait_ready(args.base_port):
@@ -660,7 +800,7 @@ def main() -> int:
 
         assert_regression(base, token, agent_token, c)
         assert_tts_synth(base, token, c)
-        conf = workbench_conf()
+        conf = workbench_conf(wb_override)
         assert_push(base, token, c, conf)
         assert_hermes_via(base, token, c, conf)
 
@@ -727,6 +867,32 @@ def main() -> int:
             c.check(False, "降级实例能启动", "见 src-instance-hermesdead.log")
         stop_instance(proc_d)
         procs.remove(proc_d)
+
+        # ---- 门禁隔离自证：请求确实进了假工作台，没进真实工作台 ----
+        # 判据落在数据上：假工作台自己记的 received.jsonl。
+        # 采集端要是打去了真实地址，这个文件就是空的，断言立刻红。
+        print("\n[8] 门禁隔离（不打真实工作台）")
+        recv_path = tmp_root / "fake-workbench" / "received.jsonl"
+        lines: list[dict] = []
+        if recv_path.is_file():
+            for ln in recv_path.read_text(encoding="utf-8").splitlines():
+                if ln.strip():
+                    try:
+                        lines.append(json.loads(ln))
+                    except ValueError:
+                        pass
+        c.check(len(lines) >= 3,
+                "推送请求全部进了假工作台（没有打到真实工作台）",
+                f"假工作台收到 {len(lines)} 条请求")
+        c.check(all(x.get("authorized") for x in lines),
+                "每次推送都带了机器凭证",
+                f"带凭证 {sum(1 for x in lines if x.get('authorized'))}/{len(lines)} 条")
+        c.check(all(x.get("tenant") for x in lines),
+                "每次推送都带了工作台租户头",
+                f"带租户头 {sum(1 for x in lines if x.get('tenant'))}/{len(lines)} 条")
+        c.check(conf.get("DH_WORKBENCH_BASE_URL") == f"http://127.0.0.1:{FAKE_WORKBENCH_PORT}",
+                "门禁配置指向假工作台（不是 env.local 里的真实地址）",
+                str(conf.get("DH_WORKBENCH_BASE_URL")))
 
     finally:
         if not args.keep:
