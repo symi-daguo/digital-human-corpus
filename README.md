@@ -31,10 +31,18 @@
 | --- | --- | --- |
 | Android | `app-arm64-v8a-release.apk`（39MB） | **推荐**，绝大多数手机 |
 | Android | `app-armeabi-v7a-release.apk`（30MB） | 老旧 32 位设备 |
-| Android | `app-universal-release.apk`（128MB） | 不确定架构时用，全兼容 |
-| macOS | `DigitalHuman-1.0.0-macos-arm64.dmg`（499MB） | Apple Silicon，**Developer ID 正式签名**（未公证，首次打开需右键→打开） |
+| Android | `app-x86_64-release.apk`（43MB） | 模拟器 / 极少数 x86_64 设备 |
+| Android | `app-universal-release.apk`（129MB） | 不确定架构时用，全兼容 |
+| macOS | `数字人服务-1.0.5.dmg`（505MB） | **Mac 生产形态：菜单栏应用**。内嵌 Python 运行时与全部依赖，**Developer ID 正式签名 + 已通过 Apple 公证**（拖进「应用程序」即可，无需右键→打开） |
+| macOS | `DigitalHuman-1.0.0-macos-arm64.dmg`（499MB） | Tauri 桌面壳（Windows / Linux 同款界面）。Apple Silicon，Developer ID 正式签名（未公证，首次打开需右键→打开） |
 | Windows | `DigitalHuman_1.0.0_x64-setup.exe`（40MB） | Win10/11 x64，**已内嵌 Python 运行时**，无需预装 |
 | Linux | `DigitalHuman_1.0.0_amd64.deb`（3MB）/ `_amd64.AppImage`（78MB） | 需要系统 python3 + WebKitGTK |
+
+> macOS 有**两个**产物，别下错：
+> **`数字人服务-X.Y.Z.dmg` 是菜单栏应用（Mac 上的生产形态）**，
+> 它把服务端（ASR / 说话人聚类 / LLM / 日报 / TTS）整个装进去，开菜单栏图标就能用；
+> `DigitalHuman-*.dmg` 是同一套服务的 Tauri 界面壳，给 Windows / Linux 用，
+> 也可以在 Apple Silicon 的 Mac 上跑，但功能与菜单栏应用一致、外形不同。
 
 **平台限制**：本地 LLM 走 MLX（依赖 Metal），**只有 Apple Silicon 能跑**。
 Intel Mac / Windows / Linux 上必须在工作台里把模型配成云端 API。
