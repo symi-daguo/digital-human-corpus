@@ -313,3 +313,30 @@ xcrun notarytool history --keychain-profile symi-notarize --keychain ~/.symi/not
 7. **`spctl --type install` 对 dmg 报 `rejected / source=no usable signature` 是正常的**：
    dmg 不是可执行文件，签名在里面的 app 上。dmg 的判据是 `stapler validate`，
    app 的判据才是 `spctl -a -t exec`。
+
+## 九、与工作台联动：讲解音频指向哪个端点
+
+工作台（智能家居 AI 工作台）的「方案讲解音频」由**本端**合成 ——
+工作台只持有一个地址，合成能力放在这里（见 `docs/workbench-integration.md`）。
+要让它出音频，工作台侧这样配：
+
+```bash
+# 工作台仓库的 .env（不在本仓库）
+NARRATION_TTS_URL=http://host.docker.internal:8767/api/tts/synthesize
+NARRATION_TTS_TOKEN=<本端 env.local 里的 DH_TOKEN>
+NARRATION_TTS_TIMEOUT_MS=300000
+```
+
+**三个要点**（2026-10-26 联调实测）：
+
+1. **端口是 8767，不是 8766**。8766 是 HTTPS 自签证书（`CN=digital-human`），
+   容器不配信任链就握手失败；8767 是纯 HTTP 的回环桥，
+   且容器能用 `host.docker.internal` 穿透到宿主回环端口（Docker Desktop 的 vpnkit 会转发）。
+   注意容器内的 `127.0.0.1` 指向容器自己，不是宿主。
+2. **Token 就是本端的 `DH_TOKEN`**（`env.local` 里那个）。缺了或填错一律 401。
+3. **超时按字数给**。实测 839 字要 148 秒、1420 字要 173 秒（约每千字 120 秒），
+   60000 毫秒在长讲稿上必然失败 —— 工作台侧已把默认改成 300000。
+
+> 工作台侧如果配的是**不存在的端口**（比如开发期临时实例留下的 8777），
+> 它的状态接口**不会报错**（URL 非空就算「配了」），只有真去生成音频时才 503。
+> 判据是「真跑一次」，不是「配置项填了没有」。

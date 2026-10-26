@@ -269,6 +269,20 @@ cd server                 # 仓库内（脚本式部署的入口目录）
   - 生产（App 形态）：`/Applications/数字人服务.app`，内置 Python 运行时与依赖，
     服务端代码在 `Contents/Resources/server/`，数据在 `~/Library/Application Support/DigitalHuman/`
   - 生产（脚本形态，备选）：代码与依赖放内建盘，原因见下方「开机自启」的外置卷 TCC 坑
+- **两个监听口**（2026-10-26 实测，用错就是连不上）：
+
+  | 端口 | 协议 | 监听 | 谁用 |
+  |---|---|---|---|
+  | 8766 | **HTTPS**（自签证书 `CN=digital-human`） | `0.0.0.0` | 手机端在局域网上传 |
+  | 8767 | 纯 HTTP | `127.0.0.1` | 桌面壳的回环工作台；`/api/tts/synthesize` 也在这个口上 |
+
+  - 外部服务（工作台容器等）要连 **8767**：纯 HTTP 无证书问题，
+    且容器可用 `host.docker.internal` **穿透到宿主的回环端口**
+    （Docker Desktop 的 vpnkit 会转发这类连接）。
+  - 8766 是自签证书，不配信任链的客户端握手直接失败 ——
+    宿主机自己用 `curl -k https://127.0.0.1:8766` 才能通。
+  - 容器内的 `127.0.0.1` 指向**容器自己**，不是宿主；宿主的回环要用
+    `host.docker.internal` 或宿主 IP。
 - **代码升级流程**：改完仓库 → 重打 bundle 并重启 App：
 
   ```bash
@@ -292,7 +306,6 @@ cd server                 # 仓库内（脚本式部署的入口目录）
   2026-09-18 实测因此出现「菜单栏两个图标，一个运行中一个未启动」，而且后启动的实例
   会 `pkill` 掉先启动那个正在跑的服务端子进程。从 **v1.5.13** 起壳内加了
   `flock` 单实例保护兜底（第二个实例会自己 `exit(0)`），但仍应只保留本项一条。
-  详情见 `docs/verification.md` §43。
 
   验证 —— **判据在 v1.5.13 变了，别再用旧的「期望 runs = 1」**：
 
@@ -308,7 +321,8 @@ cd server                 # 仓库内（脚本式部署的入口目录）
     `~/Library/Application Support/DigitalHuman/app.lock`
   - `last exit code = 9`（SIGKILL）只说明上一次是被 `kill -9` 收掉的（例如手动重启服务），
     **不代表当前有问题** —— 判「现在到底有几个实例」只看
-    `pgrep -x DigitalHumanApp | wc -l`（期望 `1`；必须用 `-x`，见 `docs/verification.md` §43.7）
+    `pgrep -x DigitalHumanApp | wc -l`（期望 `1`；**必须带 `-x`** ——
+    不带会按进程名做子串匹配，把别的进程一起数进来）
 
 - **开机自启（脚本形态）**：不再提供 LaunchAgent 模板——旧模板
   `com.symidaguo.digitalhuman-server.plist` 指向已废弃的 `~/dh-runtime`（2026-10-12 已删除）。
@@ -760,11 +774,40 @@ Hermes（含 HA 实时数据）
 
 ### TTS 后端
 
-`DH_TTS_BACKEND=auto`（默认）按顺序探测：**Piper → macOS `say` → edge-tts**。
+`DH_TTS_BACKEND` 可选 `auto` / `ming` / `piper` / `say` / `edge`：
 
-本机 2026-09-10 实测 Piper 与 edge-tts 均未安装，实际生效的是 **macOS 原生 `say`**
-（`afconvert` 转 16k 单声道）。装上 Piper 后只需填 `DH_PIPER_BIN` + `DH_PIPER_MODEL`
-即可自动切换，代码无需改动。
+- **`auto`（默认）的探测顺序是 Piper → macOS `say` → edge-tts —— 不含 ming**。
+  ming 只能**显式**配 `DH_TTS_BACKEND=ming` 才会启用。
+- 本机生产 **2026-10-26 实测生效的是 ming**（`DH_TTS_BACKEND=ming`，
+  模型 `ming-3.0-tts-0.5b-mlx`，MLX 0.5B 8bit），产物经 `afconvert` 转 16k 单声道。
+
+**分工是刻意的，不是降级**（`tts.backend(fast=)`）：
+
+| 场景 | 走哪条 | 为什么 |
+|---|---|---|
+| 实时对话（`fast=True`） | **macOS `say`** | ming 每次要起子进程加载 1.5GB 权重（3~4 秒），对话回复只有几十字，等 4 秒才出声体验很差 |
+| 长文本合成（日报播报、`/api/tts/synthesize`） | **ming** | 低频、能等，换取更好的发音鲁棒性 |
+
+> 显式配了 `ming` 但撞上对话场景时，代码会**照样改走 `say` 并在日志里说明一次**
+> （`TTS fast 路径跳过 ming（对话要低延迟），改用系统 say`），
+> 不会为了「配置即生效」让对话慢 4 秒。
+
+**合成耗时与字数成正比**（2026-10-26 实测）：
+
+| 输入 | 产出 | 耗时 |
+|---|---|---|
+| 51 字 | 394,496 字节 | **12.20 秒** |
+| 839 字 | 4,750,976 字节 | **148.34 秒** |
+| 1420 字 | 8,621,696 字节 | **173 秒** |
+
+约**每千字 120 秒**（首次还要算模型加载）。服务端自己的超时是
+`max(60, 字数 × 2.5)` 秒 —— **调用方给的超时必须按这个量级给**，
+否则长文本必然失败（工作台侧就因为默认 60 秒在 1421 字讲稿上失败过，改成了 300 秒）。
+
+> 另一个实测坑：**llm 后端正在加载时会拖慢 ming**。
+> 2026-10-26 10:09 的一次 28 字合成在 LLM 拉起 Qwen3.5-4B 的同时超时失败（503），
+> 紧接着重试 2 个字 7.7 秒就过了 —— 同一个后端、同一份代码。
+> 合成高峰与 LLM 加载撞在一起时偶发 503，重试即可，不必改代码。
 
 > 声音名的坑：`say -v Eddy`（Flo / Grandma 同理）属 Apple「新奇声音」，
 > 未下载时**退出码 0、不报错，但输出 0.02 秒空音频**，手机端表现为「点了没反应」。

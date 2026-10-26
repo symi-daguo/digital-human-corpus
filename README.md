@@ -25,18 +25,27 @@
 
 ## 二、下载安装包
 
-不想自己编译的话，直接下现成产物：[**Releases**](https://github.com/symi-daguo/digital-human-corpus/releases/latest)
+不想自己编译的话，直接下现成产物。
 
-| 平台 | 产物 | 说明 |
-| --- | --- | --- |
-| Android | `app-arm64-v8a-release.apk`（39MB） | **推荐**，绝大多数手机 |
-| Android | `app-armeabi-v7a-release.apk`（30MB） | 老旧 32 位设备 |
-| Android | `app-x86_64-release.apk`（43MB） | 模拟器 / 极少数 x86_64 设备 |
-| Android | `app-universal-release.apk`（129MB） | 不确定架构时用，全兼容 |
-| macOS | `DigitalHumanService-1.0.5-macos-arm64.dmg`（505MB） | **Mac 生产形态：菜单栏应用**。内嵌 Python 运行时与全部依赖，**Developer ID 正式签名 + 已通过 Apple 公证**（拖进「应用程序」即可，无需右键→打开） |
-| macOS | `DigitalHuman-1.0.0-macos-arm64.dmg`（499MB） | Tauri 桌面壳（Windows / Linux 同款界面）。Apple Silicon，Developer ID 正式签名（未公证，首次打开需右键→打开） |
-| Windows | `DigitalHuman_1.0.0_x64-setup.exe`（40MB） | Win10/11 x64，**已内嵌 Python 运行时**，无需预装 |
-| Linux | `DigitalHuman_1.0.0_amd64.deb`（3MB）/ `_amd64.AppImage`（78MB） | 需要系统 python3 + WebKitGTK |
+**v1.0.5（当前版本）** —— <https://github.com/symi-daguo/digital-human-corpus/releases/tag/v1.0.5>
+
+| 平台 | 产物 | 大小 | 说明 |
+| --- | --- | --- | --- |
+| Android | `app-arm64-v8a-release.apk`（39 MB） | | **推荐**，绝大多数手机 |
+| Android | `app-armeabi-v7a-release.apk`（30 MB） | | 老旧 32 位设备 |
+| Android | `app-x86_64-release.apk`（43 MB） | | 模拟器 / 极少数 x86_64 设备 |
+| Android | `app-universal-release.apk`（129 MB） | | 不确定架构时用，全兼容 |
+| macOS | `DigitalHumanService-1.0.5-macos-arm64.dmg`（491 MB） | | **Mac 生产形态：菜单栏应用**。内嵌 Python 运行时与全部依赖，**Developer ID 正式签名 + 已通过 Apple 公证**（拖进「应用程序」即可，无需右键→打开） |
+
+**跨平台产物（v1.0.0 Release，软件版本 1.0.4）** ——
+Windows / Linux 的产物在这个 Release 里，**不在 v1.0.5**：
+<https://github.com/symi-daguo/digital-human-corpus/releases/tag/v1.0.0>
+
+| 平台 | 产物 | 大小 | 说明 |
+| --- | --- | --- | --- |
+| macOS | `DigitalHuman-1.0.4-macos-arm64-notarized.dmg`（499 MB） | | Tauri 桌面壳（Windows / Linux 同款界面）。Apple Silicon，Developer ID 正式签名**并已通过 Apple 公证** |
+| Windows | `DigitalHuman_1.0.4_x64-setup.exe`（40 MB） | | Win10/11 x64，**已内嵌 Python 运行时**，无需预装 |
+| Linux | `DigitalHuman_1.0.4_amd64.deb`（3 MB）/ `DigitalHuman_1.0.4_amd64.AppImage`（78 MB） | | 需要系统 python3 + WebKitGTK |
 
 > macOS 有**两个**产物，别下错：
 > **`DigitalHumanService-X.Y.Z-macos-arm64.dmg` 是菜单栏应用（Mac 上的生产形态）**，
