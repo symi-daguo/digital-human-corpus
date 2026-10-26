@@ -813,6 +813,34 @@ Hermes（含 HA 实时数据）
 > 未下载时**退出码 0、不报错，但输出 0.02 秒空音频**，手机端表现为「点了没反应」。
 > 默认声音写死 `Tingting`（经典中文女声，系统自带）。
 
+**产物能真播出来（2026-10-26 手机实测）**：
+
+`/api/tts/synthesize` 的产物推上 Android 手机后用系统播放器播放，
+确认「不是只有文件、是真的在出声」：
+
+| 判据 | 读数 |
+|---|---|
+| 合成耗时 | 839 字 → 148.34 秒 / 4,750,976 字节 |
+| 手机系统媒体库独立读数 | `duration=148340`（ms）—— 与合成侧精确一致 |
+| 系统音频层 | `AudioTrack state:started`、`usage=USAGE_MEDIA`、`sampleRate=16000`、`channelMask=0x1`（单声道） |
+| 播放器界面 | 进度 `00:48 / 02:28`（2:28 = 148 秒），进度条在走 |
+
+采样率与声道数与产物头**逐项对得上**，说明播的确实是这份 WAV，
+而不是别的音源。复现命令：
+
+```bash
+D=<设备号>
+adb -s $D push out.wav /sdcard/Download/
+adb -s $D shell "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Download/out.wav"
+adb -s $D shell "content query --uri content://media/external/audio/media --projection _id:duration --where \"_data like '%out.wav'\""
+# 必须带 -p 指定播放器包，否则系统弹「选择打开方式」，无人点击就永远不播
+adb -s $D shell "am start -a android.intent.action.VIEW -d 'content://media/external/audio/media/<id>' -t 'audio/*' -p com.miui.player --grant-read-uri-permission"
+adb -s $D shell dumpsys audio | grep "state:started"
+```
+
+> 判据用**系统音频层**的 `state:started`，不要用播放器的 `position` ——
+> MIUI 播放器走「车机模式」会话，`position` 常驻 0，拿它判会误判成「没在播」。
+
 ### 唤醒词
 
 `config.TALK_ALIAS_GROUPS` 与 Hermes 侧 `ALIAS_GROUPS` **逐条对齐**，共 9 组、
