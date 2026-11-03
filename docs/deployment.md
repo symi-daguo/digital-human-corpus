@@ -340,3 +340,68 @@ NARRATION_TTS_TIMEOUT_MS=300000
 > 工作台侧如果配的是**不存在的端口**（比如开发期临时实例留下的 8777），
 > 它的状态接口**不会报错**（URL 非空就算「配了」），只有真去生成音频时才 503。
 > 判据是「真跑一次」，不是「配置项填了没有」。
+
+---
+
+## 九、1.0.6 全仓审查记录（2026-11-03）
+
+按 ponytail 口径审查：**correct → safe → holds under load → tested → fast → lean**。
+假设负载：单门店 1–3 台手机采集 + 1 台 Mac 跑服务与本地 LLM（非多租户高并发）。
+
+### 9.1 长期运行数据（10-27 → 11-03，7 天）
+
+| 指标 | 实测 | 判定 |
+| --- | --- | --- |
+| api.log | 39,529 行（INFO 39,289 / WARNING 79 / ERROR 33） | 正常 |
+| 服务启动 | 8 次 / 7 天，均为定时启停（13:00、18:00），非崩溃 | 正常 |
+| 内存 | server 83–111 MB、菜单栏 67–83 MB、mlx 20–62 MB（闲时卸载模型） | 合理 |
+| OOM / SIGKILL | 0 | 正常 |
+| 数据目录 | 295 MB（回收后稳定） | 合理 |
+| 日志目录 | 27 MB（按天轮转，api.log + api.log.1） | 合理 |
+
+**ERROR 33 条的构成**：29 条 `llm chat failed: Connection refused`（本地 LLM 未就绪时的瞬态，
+pipeline 已有兜底：干净稿回退原文、总结保留旧稿）；1 条 summary EMPTY（首次生成时 LLM 不可用，
+下一轮自愈）；其余 3 条为同类。**不是代码缺陷，属降级路径正常工作**。
+
+### 9.2 发现的问题（按严重度）
+
+| # | 级别 | 问题 | 具体后果 |
+| --- | --- | --- | --- |
+| 1 | **P0** | 版本漂移：`desktop/package.json` 与 `desktop/src-tauri/tauri.conf.json` 停在 **1.0.4**，其余五处是 1.0.5 | 桌面端打出的包版本号与 Android/macOS 不一致，打包流程不报错（静默漂移）。根因是 1.0.5 发布时漏跑 `bump-version.sh` |
+| 2 | P1 | 全仓**零自动化测试**（此前 find 到的 666 个测试全在 site-packages 里） | 1.0.4 的 upsert 清文本事故、reclaim 误删边界、隐私掩码错漏，都没有能拦住它们的测试 |
+| 3 | P2 | 构建缓存与残留：`macapp/.cache` 637 MB、`macapp/dist` 2.0 GB、`app/app/build` 621 MB、`logs/api.log.tokbak` 2.7 MB、`server/data/` 自检残留 | 仓库目录被撑到 722 MB；`.gitignore` 未覆盖 `macapp/.cache` |
+
+### 9.3 修复与验证
+
+- **版本统一到 1.0.6**（`bump-version.sh` 一次性改五处 + versionCode 24→25），
+  新增 `tools/check-version.sh` 做五处一致性自检：
+  - 全绿时 exit 0；故意把 tauri 改回 1.0.4 → exit 1（**双向验证通过**）
+- **新增 `server/tests/test_core.py`（12 个用例，0.02s）**，覆盖三处血泪点：
+  - `upsert_segment` 重传必须保留 text/processed/is_user（1.0.4 事故回归）
+  - `insights.is_low_value` 边界（空串/纯应答判低价值；含实体信号判有效）
+  - `redact.classify/redact` 输出不含手机号、身份证、密码原文
+  - `reclaim.plan` 安全边界：无转写文本的 wav 绝不进删除清单；超龄且有文本的才进
+- **清理 1.1 GB**：`macapp/.cache` 637M + `macapp/dist` 2.0G（含多版本 dmg）+
+  `app/app/build` 621M + `api.log.tokbak` 2.7M + `server/data/`；
+  `.gitignore` 补 `macapp/.cache/`、`macapp/dist/`
+- **静态校验**：25 个 py 全量 `py_compile` 通过；`console.py` 无 SyntaxWarning 且运行时
+  内联 JS（50,385 字符）过 `node --check`；20 个 shell 脚本 `bash -n` 全过；
+  Apple 生态门禁扫描 181 个文件通过
+- **冒烟**：服务 1.0.6 启动后 `/api/agent/{health,days,report,summary}` 全部 200
+
+### 9.4 运行方式
+
+```bash
+# 单测（用 bundle 自带解释器，不污染生产库）
+PYTHONPATH=server /Applications/数字人服务.app/Contents/Resources/python/bin/python3 \
+    -m unittest discover -s server/tests -v
+
+# 版本一致性（发布前必跑）
+tools/check-version.sh
+```
+
+### 9.5 未处理（记录在案，非本次范围）
+
+- Android / macOS / Windows 三端**无自动化 UI 测试**（只有真机手工验证流程）
+- `server/app/store.py` 单连接 + 全局锁：单门店负载正确，多门店高并发需换连接池
+- LLM 未就绪时的 `Connection refused` 仍记 ERROR 级（可降为 WARNING，减少噪声）
