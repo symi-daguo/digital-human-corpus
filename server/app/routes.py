@@ -503,6 +503,18 @@ def _make_backup(scope: str) -> dict:
     backup_dir.mkdir(parents=True, exist_ok=True)
     name = f"backup_{scope}_{datetime.now():%Y%m%d_%H%M%S}.zip"
     target = backup_dir / name
+    # 同一秒内可能连做两次备份：restore 会在恢复前先做一次 safety_backup，
+    # 若正好与用户刚点的备份落在同一秒，文件名相同 → **后者覆盖前者**（实测
+    # 2026-11-03 15:02:26 那次 safety_backup 就把刚上传的包覆盖了，等于没有安全快照）。
+    # 冲突时加 -2/-3… 后缀，永不覆盖已有备份。
+    if target.exists():
+        stem = target.stem
+        for _i in range(2, 100):
+            cand = backup_dir / f"{stem}-{_i}.zip"
+            if not cand.exists():
+                target = cand
+                name = cand.name
+                break
 
     scope_tenants = ([t for t in tenants.all_tenants()] if scope == "all"
                      else [tenants.resolve(scope)])
