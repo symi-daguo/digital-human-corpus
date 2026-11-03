@@ -405,3 +405,42 @@ tools/check-version.sh
 - Android / macOS / Windows 三端**无自动化 UI 测试**（只有真机手工验证流程）
 - `server/app/store.py` 单连接 + 全局锁：单门店负载正确，多门店高并发需换连接池
 - LLM 未就绪时的 `Connection refused` 仍记 ERROR 级（可降为 WARNING，减少噪声）
+
+---
+
+## 十、本地 LLM 生命周期与内存（2026-11-03 实测）
+
+本地模型 **不是常驻计算**：`llm_backend_guard` 按「处理窗口 + 积压数量」决定要不要把
+mlx-lm 拉起来，空闲就停掉并释放内存。判定逻辑（`server/app/llm.py` guard 日志）：
+
+| 条件 | 行为 |
+| --- | --- |
+| 处于 `DH_AGG_WINDOWS` 窗口内，**或**积压 ≥ `DH_AGG_BATCH_MIN` 段 | `ensure running` → 拉起 mlx-lm |
+| 窗口外且积压未达标，且管线空闲 | `will stop when idle` → `stopped ... memory released` |
+
+默认值：`DH_AGG_WINDOWS=13:00,17:45`、`DH_AGG_BATCH_MIN=30`。
+
+### ⚠️ 一个会让内存常驻 3.7 GB 的配置
+
+把两项都清空 = **实时模式**：
+
+```ini
+DH_AGG_WINDOWS=
+DH_AGG_BATCH_MIN=0
+```
+
+实时模式下 guard 每轮都判 `processing active (window '' / batch 0)` → **always ensure running**
+→ mlx 永不释放，一整天占着 3.7 GB（`footprint` 实测，峰值 4.6 GB），
+一天能跑 1000+ 轮 LLM 清洗（实测 7 天 1229 轮）。
+
+### 实测对比（同一台机器）
+
+| 配置 | mlx 占用 | pipeline 频率 |
+| --- | --- | --- |
+| 实时模式（`""` + `0`） | 3.7 GB 常驻不释放 | 7 天 1229 轮 |
+| 窗口+批量（`13:00,17:45` + `30`） | 空闲时**进程不存在**（已释放）；窗口内拉起约 3.7 GB | 窗口内 + 积压达标时才跑 |
+
+其余进程：菜单栏 App 83–92 MB、server 790–840 MB（含 ASR 常驻，比 LLM 小一个量级）。
+
+**部署建议**：门店场景用窗口+批量（省内存、省电、省 CPU）；需要"说完就出稿"再切实时，
+但要接受 mlx 常驻 3.7 GB。
