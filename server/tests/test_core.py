@@ -128,18 +128,18 @@ class RedactMasksSecrets(unittest.TestCase):
         return "".join(s for c in redact.classify(text) for s in c["samples"])
 
     def test_phone_masked(self):
-        joined = self._samples("我的手机是 13812345678")
-        self.assertNotIn("13812345678", joined)
+        joined = self._samples("我的手机是 13900000000")
+        self.assertNotIn("13900000000", joined)
         self.assertIn("*", joined, "必须打码")
 
     def test_id_card_masked(self):
-        joined = self._samples("身份证 320102199001011234")
-        self.assertNotIn("320102199001011234", joined)
+        joined = self._samples("身份证 110101199001010000")
+        self.assertNotIn("110101199001010000", joined)
 
     def test_redact_removes_original(self):
-        out, n = redact.redact("我的手机是 13812345678，密码是 abc123")
+        out, n = redact.redact("我的手机是 13900000000，密码是 abc123")
         self.assertGreater(n, 0)
-        self.assertNotIn("13812345678", out)
+        self.assertNotIn("13900000000", out)
         self.assertNotIn("abc123", out)
 
     def test_clean_text_untouched(self):

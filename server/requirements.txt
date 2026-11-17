@@ -2,6 +2,8 @@
 # 核心 Web 服务
 # 采用「下限 + 上界」写法：下限保证功能可用，上界避免未来大版本不兼容升级。
 fastapi>=0.115,<1.0
+# 实测验证：0.163.1（2026-11-17，bundle 内升级；需 starlette>=0.46 / pydantic>=2.9 /
+# typing-inspection>=0.4.2 / annotated-doc>=0.0.2 / opentelemetry-api>=1.44 同时满足）
 uvicorn>=0.32,<1.0
 starlette>=0.41,<2.0
 pydantic>=2.9,<3.0

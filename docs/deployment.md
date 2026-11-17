@@ -492,3 +492,75 @@ mlx-lm 0.32.2 对 3.15 的 wheel 可用），不建议与功能迭代混做。
 - 处理窗口内：mlx 拉起约 3.7 GB（4B-4bit 权重 + KV cache），窗口结束由 guard 停掉
 - 7 天数据：8 次定时启停、0 OOM、0 SIGKILL；日志按天轮转（api.log 4.7 M + api.log.1 20 M）
 - 自启：`RunAtLoad=true`、`KeepAlive=false`（登录自启、手动退出不反复拉起）
+
+---
+
+## 十二、1.0.7：半个月稳定性审计与技术栈升级（2026-11-17）
+
+审查口径同 ponytail：**correct → safe → 持得住负载 → 有测试 → 快 → 精简**。
+
+### 12.1 运行数据（日志覆盖 2026-09-05 → 11-17，约 2.5 个月）
+
+| 指标 | 实测 | 判定 |
+| --- | --- | --- |
+| 日志量 | 273,035 INFO / 1,391 WARNING / 712 ERROR（27 万行） | 正常 |
+| **最近 14 天 ERROR** | **仅 5 条**，全是「当天无数据 → summary/clean 返回空」 | 正常 |
+| 历史 ERROR | 712 条中 **702 条集中在 9 月**（pipeline crashed 192 于 9-12/14、WHISPER 未配置 64 于 9-05/07/08、ASGI 16 于 9-20~27） | 均为已修复的历史问题 |
+| 服务启动 | 20 次 / 14 天（≈1.4 次/天，定时启停） | 正常 |
+| 内存（空闲） | 菜单栏 107 MB、server 47 MB、mlx 47 MB（窗口外已释放） | 合理 |
+| 磁盘 | 数据 327 MB、日志 34 MB、仓库 82 MB | 合理 |
+| OOM / SIGKILL | 0 | 正常 |
+
+**pipeline crashed 的根因（9 月）**：ONNX 音频分类模型在 `audio_tagging.is_speech()`
+执行 `Reshape` 节点报 `Non-zero status code`——音频长度异常触发。9 月之后再未复现。
+
+### 12.2 技术栈核对（2026-11-17 联网）
+
+| 组件 | 升级前 | 最新稳定 | 处理 |
+| --- | --- | --- | --- |
+| **FastAPI** | 0.159.1 | **0.163.1**（11-15） | ✅ **已升级**（跨 4 个 minor，见 12.3） |
+| uvicorn | 0.54.0 | 0.54.x | 已最新 |
+| mlx-lm | 0.32.2 | 0.32.2（10-16） | 已最新 |
+| MLX | 0.32.4 | 0.32.4（10-14） | 已最新（**已支持 Python 3.15**） |
+| Python（bundle） | 3.13.12 | 3.15.2 | 未升级：需重建 bundle，单独立项 |
+| Kotlin | 2.4.21 | 2.4.21 | 已最新（2.5.0 计划 2026-12） |
+| AGP | 9.4.1 | 9.4.x | 已最新 |
+| Compose BOM | 2026.09.00 | 2026.09.00 | 已最新 |
+| Tauri | ^2.12.2 | 2.12.x | 已最新 |
+
+### 12.3 FastAPI 0.159.1 → 0.163.1 升级记录
+
+bundle 内 Python **不带 pip/ensurepip**（精简发行），升级方式：
+用外部 pip 下载 `--only-binary --platform macosx_11_0_arm64 --python-version 313 --no-deps`
+的 wheel，解压覆盖 `site-packages/fastapi`，保留 `dist-info`。
+
+**升级前先核对新版本的硬依赖**（0.163 新增三项）：
+
+| 依赖 | 要求 | bundle 实际 | 结果 |
+| --- | --- | --- | --- |
+| starlette | >=0.46.0 | 1.9.0 | ✅ |
+| anyio | >=4.1.0 | 4.15.1 | ✅ |
+| pydantic | >=2.9.0 | 2.14.1 | ✅ |
+| typing-inspection | >=0.4.2 | 0.4.4 | ✅ |
+| annotated-doc | >=0.0.2 | 0.0.5 | ✅ |
+| opentelemetry-api | >=1.44.0 | 1.45.1 | ✅ |
+
+**验证**：12 个回归测试全过（0.022s）、`py_compile` 25 文件通过、服务重启无 ERROR、
+`/api/agent/{health,days,report,summary}` 四端点全 200。
+
+**回滚**：升级前已备份 `fastapi/` + `starlette/` + 两个 dist-info 到
+`~/Library/Application Support/DigitalHuman/backups-pylib-<时间戳>/`。
+
+### 12.4 顺手清理的污染
+
+`data/profiles.json` 里残留一条测试设备档案 `ctest-inst`（2026-11-03 并发测试时自动登记，
+指向已删除的 `bktest` 租户），导致每次启动打一条 WARNING。已删除，保留「大锅」「小翼管家」两条真实档案。
+
+### 12.5 已知限制（长期运行相关，本轮不改）
+
+**说话人簇 200 段上限后仍留在匹配池**：`voiceprint.py` 在簇内段数达 `_AUDIT_HUGE_COUNT-1`（199）
+时冻结质心，但摘出匹配池的判据是 `cnt >= 200`，冻结把 cnt 钉在 199 → **永远摘不出去**，
+该簇继续吸附新段。实测已有 6 个簇命中（说话人 12/21/25/27/69/349）。
+
+影响：长跑后说话人识别准确率随簇膨胀缓慢下降。修它需要重做聚类淘汰策略（风险高于收益），
+本轮记录在案。缓解手段：定期清理 `speaker` 表并重新聚类（会短暂影响识别连续性）。
