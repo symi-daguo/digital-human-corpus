@@ -564,3 +564,54 @@ bundle 内 Python **不带 pip/ensurepip**（精简发行），升级方式：
 
 影响：长跑后说话人识别准确率随簇膨胀缓慢下降。修它需要重做聚类淘汰策略（风险高于收益），
 本轮记录在案。缓解手段：定期清理 `speaker` 表并重新聚类（会短暂影响识别连续性）。
+
+---
+
+## 十三、本地模型替换评估（2026-11-17）
+
+目标：判断当前 `Qwen3.5-4B-4bit`（2.9 GB）是否该换成更新的开源模型。
+
+### 13.1 调研结论（联网核对 + HF 镜像搜索）
+
+| 档位 | 候选 | MLX 4bit 可用性 | 判断 |
+| --- | --- | --- | --- |
+| 4B | **Qwen3.5-4B**（当前） | ✅ 官方 | 2026-11-17 的独立选型榜单仍把它列为 8GB 档首选 |
+| 4B | **Qwen3.8-4B-Distill**（2.4T 旗舰蒸馏） | ❌ 只有 GGUF（llama.cpp） | mlx_lm 不认 GGUF，需先取 bf16 原始权重再转（8.6 GB + 转换） |
+| 9B | Qwen3.5-9B / Qwen3.8-9B-Distill | ✅ 官方 / 第三方 | 体积翻倍、速度约 1/3，实时清洗收益不明显 |
+| 27B | Qwen3.8-27B-4bit | ✅ 官方 | 约 14 GB，窗口内常驻会吃满内存，不适合 |
+
+### 13.2 实测（同一段真实语料 3000 字 + 项目真实的 CLEAN prompt 与参数）
+
+参数与生产一致：`enable_thinking=False`、`temperature=0.3`、`max_tokens=4096`。
+
+| 模型 | 加载 | 生成 | 输出 | 速度 | 质量 |
+| --- | --- | --- | --- | --- | --- |
+| **Qwen3.5-4B-4bit** | 1.4 s | 26.5 s | 3,086 字 | **116 字/秒** | ✅ 46 个时间戳行完整保留，中文通顺，未擅自改写内容 |
+| Qwen3.8-9B-VL-4bit | 2.0 s | 79.6 s | 21,074 字 | 265 字/秒 | ❌ **输出多语言乱码**（阿拉伯/韩/俄/越语混杂），零时间戳，重复率 92% |
+
+### 13.3 关键教训：多模态模型的文本部分不能直接拿来用
+
+`keXjos/Qwen3.8-9B-mlx-4Bit` 的 `architectures` 是 `Qwen3_5ForConditionalGeneration`，
+config 含 `image_token_id` / `video_token_id` / `vision_*_token_id`。它**能被 mlx_lm 加载**
+（`qwen3_5.py` 会读 `text_config`，32 层 / hidden 4096 / 4 KV heads 都能对上，加载仅 2 s），
+但 **tokenizer 与 chat_template 是 VL 版**，纯文本推理时输出直接崩成多语言噪声。
+
+判据：**看 config 里有没有 `vision_config` / `image_token_id`**。有就是 VL 模型，
+即便加载成功也不能用于纯文本任务。`architectures` 含 `ForConditionalGeneration` 同样是信号。
+
+### 13.4 结论
+
+**当前 Qwen3.5-4B-4bit 仍是最优选择**，本轮不替换：
+- 4B 档唯一的升级候选（Qwen3.8-4B-Distill）没有 MLX 权重，转换成本高且收益未验证
+- 9B/27B 档体积与延迟代价明显（9B 实测慢 4.7 倍，VL 版还不可用）
+- 4B 在真实语料上输出结构与内容都对，116 字/秒对 3000 字稿约 27 秒一轮，够用
+
+### 13.5 后续监测（值得重测的信号）
+
+1. `mlx-community/Qwen3.8-4B-Distill-4bit` 出现（官方转 MLX）→ 直接测
+2. Qwen3.8 系列出 4B/8B 的 **纯文本** 版（config 无 vision 字段）→ 测
+3. mlx-lm 增加 `qwen3_5_vl` 支持且能纯文本推理 → 再评估 9B-VL
+
+复现方法：`mlx_lm.load` + `apply_chat_template(enable_thinking=False)` +
+`make_sampler(temp=0.3)`，语料取 `report` 表任一日期 `raw` 的前 3000 字，
+prompt 直接用 `llm.clean_system()`。
